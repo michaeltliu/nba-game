@@ -59,8 +59,9 @@ class Room:
         self.members: dict[str, Player] = {owner_id: Player(owner_name)}
         self.player_queue: list[NBAPlayer] = []
         self.round_num = 0
-        self.current_auction = Auction(0, set(), 0)
+        self.current_auction = None
         self.prev_auction_result = dict()
+        self.prev_game_final = []
 
     def __str__(self):
         return f"""
@@ -84,7 +85,7 @@ class Room:
         self.round_num += 1
         self.current_auction = Auction(
             self.round_num,
-            set(self.members),
+            self._incomplete_roster_members(),
             time.time() + self.bid_timer
         )
 
@@ -98,7 +99,7 @@ class Room:
         if not winner_id:
             if nba_player.skipped:
                 self.handle_auction_end(
-                    random.choice(tuple(self.members)),
+                    random.choice(tuple(self._incomplete_roster_members())),
                     price_paid # Should be 0 in this case
                 )
                 return
@@ -109,11 +110,20 @@ class Room:
             winner = self.members[winner_id]
             winner.nba_team.append(self.player_queue.pop(0))
             winner.balance -= price_paid
+            winner.compute_score()
             self.prev_auction_result['winner'] = winner.name
 
         self.prev_auction_result['nba_player'] = nba_player
         self.prev_auction_result['price_paid'] = price_paid
-        self.next_round()
+        if not self.player_queue:
+            self.round_num = 0
+            self.current_auction = None
+            self.prev_game_final = list(self.members.values())
+        else:
+            self.next_round()
+
+    def _incomplete_roster_members(self) -> set[str]:
+        return set(k for k in self.members if len(self.members[k].nba_team) < 5)
 
 @dataclass
 class Player:

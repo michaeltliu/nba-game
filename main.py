@@ -49,6 +49,11 @@ async def join_room(room_code: str, request: JoinRoomRequest):
             'failure_msg': Failure.ROOM_CODE_NOT_FOUND.name
         }
     room = rooms[room_code]
+    if room.round_num > 0:
+        return {
+            'success': False,
+            'failure_msg': 'GAME_IN_PROGRESS'
+        }
     player_id = str(uuid.uuid4())
     room.add_member(player_id, request.player_name)
     print(room)
@@ -70,8 +75,8 @@ async def room_status(room_code: str):
         'members': list(room.members.values()),
         'player_queue': room.player_queue,
         'round_num': room.round_num,
-        'round_ends_at': room.current_auction.end_ts,
-        'bids_received': len(room.current_auction.bids),
+        'round_ends_at': room.current_auction.end_ts if room.current_auction else 0,
+        'bids_received': len(room.current_auction.bids) if room.current_auction else 0,
         'prev_auction_result': room.prev_auction_result
     }
     return status
@@ -120,16 +125,21 @@ async def submit_bid(
             'success': False,
             'failure_msg': Failure.PLAYER_ID_NOT_FOUND.name
         }
-    if request.round_num != room.round_num:
+    if request.round_num <= 0 or request.round_num != room.round_num:
         return {
             'success': False,
-            'failure_msg': 'ROUND_MISMATCH'
+            'failure_msg': 'BAD_ROUND_NUMBER'
         }
     bid = request.bid_amount
     if bid < 0 or bid > room.members[x_player_id].balance:
         return {
             'success': False,
             'failure_msg': 'INVALID_BID_AMOUNT'
+        }
+    if len(room.members[x_player_id].nba_team) >= 5:
+        return {
+            'success': False,
+            'failure_msg': 'ROSTER_FULL'
         }
     auction = room.current_auction
     auction.bids[x_player_id] = bid
