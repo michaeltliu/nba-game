@@ -118,8 +118,8 @@ class Room:
         self.prev_auction_result['nba_player'] = nba_player
         self.prev_auction_result['price_paid'] = price_paid
         if not self.player_queue:
-            self._game_finished_reset()
             self.prev_game_final = copy.deepcopy(list(self.members.values()))
+            self._game_finished_reset()
         else:
             self.next_round()
 
