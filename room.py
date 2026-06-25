@@ -92,6 +92,8 @@ class Room:
     def start_game(self):
         num_players_needed = 5 * len(self.members)
         self.player_queue = get_sampled_players(num_players_needed)
+        # This reset step isn't done on game completion in order to preserve history
+        self.prev_auction_result = dict()
         self.next_round()
 
     def handle_auction_end(self, winner_id: str, price_paid: int):
@@ -116,21 +118,28 @@ class Room:
         self.prev_auction_result['nba_player'] = nba_player
         self.prev_auction_result['price_paid'] = price_paid
         if not self.player_queue:
-            self.round_num = 0
-            self.current_auction = None
-            self.prev_game_final = list(self.members.values())
+            self._game_finished_reset()
+            self.prev_game_final = copy.deepcopy(list(self.members.values()))
         else:
             self.next_round()
 
     def _incomplete_roster_members(self) -> set[str]:
         return set(k for k in self.members if len(self.members[k].nba_team) < 5)
 
+    def _game_finished_reset(self):
+        self.round_num = 0
+        self.current_auction = None
+        for player in self.members.values():
+            player.nba_team = []
+            player.balance = 100
+            player.score = 0.0
+
 @dataclass
 class Player:
     name: str
     nba_team: list[NBAPlayer] = field(default_factory=list)
     balance: int = 100
-    score = 0
+    score: float = 0.0
 
     def compute_score(self) -> float:
         pts, ast, reb, blk, stl, tov, ts = [0] * 7

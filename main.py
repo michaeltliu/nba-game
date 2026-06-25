@@ -77,7 +77,8 @@ async def room_status(room_code: str):
         'round_num': room.round_num,
         'round_ends_at': room.current_auction.end_ts if room.current_auction else 0,
         'bids_received': len(room.current_auction.bids) if room.current_auction else 0,
-        'prev_auction_result': room.prev_auction_result
+        'prev_auction_result': room.prev_auction_result,
+        'prev_game_final': room.prev_game_final
     }
     return status
 
