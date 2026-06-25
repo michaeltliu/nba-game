@@ -37,6 +37,24 @@ player_averages = player_averages.merge(players_positions, on='personId', how='l
 # Fill any missing position values with 0 and convert them to integer
 player_averages[['guard', 'forward', 'center']] = player_averages[['guard', 'forward', 'center']].fillna(0).astype(int)
 
+# Calculate True Shooting percentage (TS%)
+denom = 2 * (player_averages['fieldGoalsAttempted'] + 0.44 * player_averages['freeThrowsAttempted'])
+player_averages['ts'] = player_averages['points'] / denom
+player_averages['ts'] = player_averages['ts'].fillna(0.0)
+
+# Calculate Fantasy Points
+player_averages['fantasyPoints'] = (
+    player_averages['points'] +
+    player_averages['reboundsTotal'] +
+    1.5 * player_averages['assists'] +
+    4 * player_averages['steals'] +
+    4 * player_averages['blocks'] -
+    2 * player_averages['turnovers']
+)
+
+# Sort players by fantasyPoints descending
+player_averages = player_averages.sort_values(by='fantasyPoints', ascending=False)
+
 # Rearrange columns to place positions right after lastName
 cols = list(player_averages.columns)
 last_name_idx = cols.index('lastName')

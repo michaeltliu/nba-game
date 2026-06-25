@@ -17,6 +17,11 @@ class CreateRoomRequest(BaseModel):
 
 @app.post("/create-room")
 async def create_room(request: CreateRoomRequest):
+    if not request.player_name:
+        return {
+            'success': False,
+            'failure_msg': Failure.EMPTY_PLAYER_NAME.name
+        }
     room_code = ''.join(random.choices(string.ascii_uppercase, k=5))
     owner_id = str(uuid.uuid4())
     rooms[room_code] = Room(
@@ -25,7 +30,7 @@ async def create_room(request: CreateRoomRequest):
         room_code,
         max(request.bid_submission_timer, 10),
         request.missing_position_penalty if request.missing_position_penalty in (0, 1, 2) else 1)
-    return {'room_code': room_code, 'player_id': owner_id}
+    return {'success': True, 'room_code': room_code, 'player_id': owner_id}
 
 
 class JoinRoomRequest(BaseModel):
@@ -33,6 +38,11 @@ class JoinRoomRequest(BaseModel):
 
 @app.post("/join-room/{room_code}")
 async def join_room(room_code: str, request: JoinRoomRequest):
+    if not request.player_name:
+        return {
+            'success': False,
+            'failure_msg': Failure.EMPTY_PLAYER_NAME.name
+        }
     if room_code not in rooms:
         return {
             'success': False,
@@ -61,7 +71,8 @@ async def room_status(room_code: str):
         'player_queue': room.player_queue,
         'round_num': room.round_num,
         'round_ends_at': room.current_auction.end_ts,
-        'bids_received': len(room.current_auction.bids)
+        'bids_received': len(room.current_auction.bids),
+        'prev_auction_result': room.prev_auction_result
     }
     return status
 

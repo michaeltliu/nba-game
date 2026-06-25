@@ -3,6 +3,44 @@ from game import Auction, AuctionResult, NBAPlayer
 import json
 import random
 import time
+import os
+import copy
+import pandas as pd
+
+_TOP_200_PLAYERS_DF: pd.DataFrame = None
+
+def _load_players_pool():
+    global _TOP_200_PLAYERS_DF
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(base_dir, 'player_averages_2025_26.csv')
+    
+    df = pd.read_csv(csv_path)
+    _TOP_200_PLAYERS_DF = df.head(200)
+
+def get_sampled_players(num_players_needed: int) -> list[NBAPlayer]:
+    global _TOP_200_PLAYERS_DF
+    if _TOP_200_PLAYERS_DF is None:
+        _load_players_pool()
+                
+    sample_size = min(num_players_needed, len(_TOP_200_PLAYERS_DF))
+    sampled_df = _TOP_200_PLAYERS_DF.sample(n=sample_size)
+    
+    players = [
+        NBAPlayer(
+            name=f"{row.firstName} {row.lastName}",
+            pid=int(row.personId),
+            pts=float(row.points),
+            ast=float(row.assists),
+            reb=float(row.reboundsTotal),
+            blk=float(row.blocks),
+            stl=float(row.steals),
+            tov=float(row.turnovers),
+            ts=float(row.ts)
+        )
+        for row in sampled_df.itertuples(index=False)
+    ]
+    return players
 
 class Room:
     def __init__(
@@ -51,7 +89,8 @@ class Room:
         )
 
     def start_game(self):
-        
+        num_players_needed = 5 * len(self.members)
+        self.player_queue = get_sampled_players(num_players_needed)
         self.next_round()
 
     def handle_auction_end(self, winner_id: str, price_paid: int):
@@ -81,6 +120,18 @@ class Player:
     name: str
     nba_team: list[NBAPlayer] = field(default_factory=list)
     balance: int = 100
+    score = 0
 
-    def get_composite_score(self) -> float:
-        pass
+    def compute_score(self) -> float:
+        pts, ast, reb, blk, stl, tov, ts = [0] * 7
+        for player in self.nba_team:
+            pts += player.pts
+            ast += player.ast
+            reb += player.reb
+            blk += player.blk
+            stl += player.stl
+            tov += player.tov
+            ts += player.ts
+        score = pts * ast * reb * blk * stl * ts / (tov ** 0.5)
+        self.score = score
+        return score
