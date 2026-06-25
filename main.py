@@ -53,13 +53,17 @@ async def room_status(room_code: str):
             'failure_msg': Failure.ROOM_CODE_NOT_FOUND.name
         }
     room = rooms[room_code]
-    auction_status = room.current_auction.maybe_resolve()
-    return {
+    if room.round_num > 0:
+        auction_status = room.current_auction.maybe_resolve()
+    status = {
         'success': True,
-        # 'player_queue': ,
+        'members': list(room.members.values()),
+        'player_queue': room.player_queue,
         'round_num': room.round_num,
         'round_ends_at': room.current_auction.end_ts,
-    } | auction_status
+        'bids_received': len(room.current_auction.bids)
+    }
+    return status
 
 
 @app.post("/rooms/{room_code}/start-game")
@@ -80,12 +84,12 @@ async def start_game(room_code: str, x_player_id: str = Header(...)):
             'success': False,
             'failure_msg': 'ALREADY_STARTED'
         }
-    room.next_round()
+    room.start_game()
     return {'success': True}
 
 
 class SubmitBidRequest(BaseModel):
-    bid: int
+    bid_amount: int
     round_num: int
 
 @app.post("/rooms/{room_code}/bid")
@@ -110,12 +114,19 @@ async def submit_bid(
             'success': False,
             'failure_msg': 'ROUND_MISMATCH'
         }
-    if request.bid < 0:
+    bid = request.bid_amount
+    if bid < 0 or bid > room.members[x_player_id].balance:
         return {
             'success': False,
-            'failure_msg': 'NEGATIVE_BID'
+            'failure_msg': 'INVALID_BID_AMOUNT'
         }
     auction = room.current_auction
-    auction.bids[x_player_id] = request.bid
-    return auction.maybe_resolve() | {'success': True}
+    auction.bids[x_player_id] = bid
+    auction_status = auction.maybe_resolve()
+    if auction_status.resolved:
+        room.handle_auction_end(
+            auction_status.winner_id,
+            auction_status.price_paid
+        )
+    return {'success': True}
 
