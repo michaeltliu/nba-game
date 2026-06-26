@@ -29,16 +29,18 @@ class CreateRoomRequest(BaseModel):
     player_name: str
     bid_submission_timer: int
     missing_position_penalty: int
+    additional_players_queued: int
 
 @app.post("/create-room")
 async def create_room(request: CreateRoomRequest):
     if not request.player_name:
         return {'success': False, 'failure_msg': Failure.EMPTY_PLAYER_NAME.name}
     owner_id = str(uuid.uuid4())
+    added_players = min(max(request.additional_players_queued, 0), 5)
     penalty = request.missing_position_penalty if request.missing_position_penalty in (0, 1, 2) else 1
     bid_timer = max(request.bid_submission_timer, 10)
     room = await redis_store.create_room_with_unique_code(
-        lambda code: Room.create(owner_id, request.player_name, code, bid_timer, penalty)
+        lambda code: Room.create(owner_id, request.player_name, code, bid_timer, penalty, added_players)
     )
     return {'success': True, 'room_code': room.join_code, 'player_id': owner_id}
 

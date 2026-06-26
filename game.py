@@ -41,6 +41,9 @@ class Auction(BaseModel):
 class NBAPlayer(BaseModel):
     name: str
     pid: int
+    guard: bool
+    forward: bool
+    center: bool
     pts: float
     ast: float
     reb: float

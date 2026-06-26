@@ -52,6 +52,9 @@ player_averages['fantasyPoints'] = (
     2 * player_averages['turnovers']
 )
 
+# Filter out players with no valid position
+player_averages = player_averages[player_averages[['guard', 'forward', 'center']].any(axis=1)]
+
 # Sort players by fantasyPoints descending
 player_averages = player_averages.sort_values(by='fantasyPoints', ascending=False)
 
