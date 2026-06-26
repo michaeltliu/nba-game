@@ -71,7 +71,7 @@ class Room(BaseModel):
         self.round_num += 1
         self.current_auction = Auction(
             round_num=self.round_num,
-            expected_player_ids=self._incomplete_roster_members(),
+            expected_player_ids=self._expected_bidders(),
             end_ts=time.time() + self.bid_timer
         )
 
@@ -87,7 +87,7 @@ class Room(BaseModel):
         if not winner_id:
             if nba_player.skipped:
                 self.handle_auction_end(
-                    random.choice(tuple(self._incomplete_roster_members())),
+                    random.choice(self._incomplete_roster_members()),
                     price_paid # Should be 0 in this case
                 )
                 return
@@ -112,8 +112,11 @@ class Room(BaseModel):
         else:
             self.next_round()
 
-    def _incomplete_roster_members(self) -> set[str]:
-        return set(k for k in self.members if len(self.members[k].nba_team) < 5)
+    def _incomplete_roster_members(self) -> tuple[str]:
+        return tuple(k for k in self.members if len(self.members[k].nba_team) < 5)
+
+    def _expected_bidders(self) -> set[str]:
+        return set(k for k in self.members if len(self.members[k].nba_team) < 5 and self.members[k].balance > 0)
 
     def _game_finished_reset(self):
         self.round_num = 0
