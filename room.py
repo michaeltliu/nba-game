@@ -141,7 +141,7 @@ class Room(BaseModel):
 class Player(BaseModel):
     name: str
     nba_team: list[NBAPlayer] = Field(default_factory=list)
-    lineup: dict[str, int] = Field(default_factory=dict)
+    lineup: dict[str, list[int]] = Field(default_factory=dict)
     balance: int = 100
     score: float = 0.0
 
@@ -197,9 +197,10 @@ class Player(BaseModel):
                 best_unfulfilled = unfulfilled
                 best_assignment = assignment
 
-        self.lineup = {'guard': [], 'forward': [], 'center': []}
+        lineup = {'guard': [], 'forward': [], 'center': []}
         for idx, pos in enumerate(best_assignment):
-            self.lineup[pos].append(idx)
+            lineup[pos].append(idx)
+        self.lineup = lineup
 
         return best_unfulfilled
 
