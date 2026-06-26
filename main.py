@@ -1,12 +1,29 @@
 from fastapi import FastAPI, Header
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from enums import Failure
 from room import Room
 import redis_store
+import os
 import uuid
 
 
 app = FastAPI()
+
+# Allow the browser frontend to call the API cross-origin. Override the allowed
+# origins in production via the FRONTEND_ORIGINS env var (comma-separated).
+_frontend_origins = os.environ.get(
+    "FRONTEND_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+).split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in _frontend_origins if origin.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class CreateRoomRequest(BaseModel):
     player_name: str
