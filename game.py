@@ -1,27 +1,24 @@
-from dataclasses import dataclass
+from pydantic import BaseModel, Field
 import time
 
-@dataclass
-class AuctionResult:
+class AuctionResult(BaseModel):
     auction_num: int
     resolved: bool
     winner_id: str = None
     price_paid: int = None
 
-class Auction:
-    def __init__(self, round_num: int, expected_player_ids: set[str], end_ts: int):
-        self.round_num = round_num
-        self.expected_player_ids = expected_player_ids
-        self.end_ts = end_ts
-        
-        self.bids: dict[str, int] = dict()
+class Auction(BaseModel):
+    round_num: int
+    expected_player_ids: set[str]
+    end_ts: float
+    bids: dict[str, int] = Field(default_factory=dict)
 
     def maybe_resolve(self) -> AuctionResult:
         expired = time.time() > self.end_ts
         all_submitted = self.expected_player_ids <= self.bids.keys()
         if expired or all_submitted:
             return self._resolve()
-        return AuctionResult(self.round_num, False)
+        return AuctionResult(auction_num=self.round_num, resolved=False)
 
     def _resolve(self) -> AuctionResult:
         first_price = 0
@@ -34,10 +31,14 @@ class Auction:
                 winner_id = player_id
             elif bid > second_price:
                 second_price = bid
-        return AuctionResult(self.round_num, True, winner_id, second_price)
+        return AuctionResult(
+            auction_num=self.round_num,
+            resolved=True,
+            winner_id=winner_id,
+            price_paid=second_price
+        )
 
-@dataclass
-class NBAPlayer:
+class NBAPlayer(BaseModel):
     name: str
     pid: int
     pts: float

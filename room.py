@@ -1,6 +1,5 @@
-from dataclasses import dataclass, field
 from game import Auction, AuctionResult, NBAPlayer
-import json
+from pydantic import BaseModel, Field
 import random
 import time
 import os
@@ -42,58 +41,45 @@ def get_sampled_players(num_players_needed: int) -> list[NBAPlayer]:
     ]
     return players
 
-class Room:
-    def __init__(
-        self,
-        owner_id: str,
-        owner_name: str,
-        join_code: str,
-        bid_timer: int,
-        missing_position_penalty: int
-    ):
-        self.owner_id = owner_id
-        self.join_code = join_code
-        self.bid_timer = bid_timer
-        self.missing_position_penalty = missing_position_penalty
+class Room(BaseModel):
+    owner_id: str
+    join_code: str
+    bid_timer: int
+    missing_position_penalty: int
 
-        self.members: dict[str, Player] = {owner_id: Player(owner_name)}
-        self.player_queue: list[NBAPlayer] = []
-        self.round_num = 0
-        self.current_auction = None
-        self.prev_auction_result = dict()
-        self.prev_game_final = []
+    members: dict[str, Player] = Field(default_factory=dict)
+    player_queue: list[NBAPlayer] = Field(default_factory=list)
+    round_num: int = 0
+    current_auction: Auction | None = None
+    prev_auction_result: PrevAuctionResult | None = None
+    prev_game_final: list[Player] = Field(default_factory=list)
 
-    def __str__(self):
-        return f"""
-        Room(
-            owner_id={self.owner_id},
-            join_code={self.join_code},
-            bid_timer={self.bid_timer},
-            missing_position_penalty={self.missing_position_penalty},
-            members={self.members}
-            player_queue={self.player_queue}
-            round_num={self.round_num}
-        )"""
-
-    def __repr__(self):
-        return self.__str__()
+    @classmethod
+    def create(cls, owner_id, owner_name, join_code, bid_timer, missing_position_penalty) -> Room:
+        room = cls(
+            owner_id=owner_id,
+            join_code=join_code,
+            bid_timer=bid_timer,
+            missing_position_penalty=missing_position_penalty)
+        room.members[owner_id] = Player(name=owner_name)
+        return room
 
     def add_member(self, player_id: str, player_name: str):
-        self.members[player_id] = Player(player_name)
+        self.members[player_id] = Player(name=player_name)
 
     def next_round(self):
         self.round_num += 1
         self.current_auction = Auction(
-            self.round_num,
-            self._incomplete_roster_members(),
-            time.time() + self.bid_timer
+            round_num=self.round_num,
+            expected_player_ids=self._incomplete_roster_members(),
+            end_ts=time.time() + self.bid_timer
         )
 
     def start_game(self):
         num_players_needed = 5 * len(self.members)
         self.player_queue = get_sampled_players(num_players_needed)
         # This reset step isn't done on game completion in order to preserve history
-        self.prev_auction_result = dict()
+        self.prev_auction_result = None
         self.next_round()
 
     def handle_auction_end(self, winner_id: str, price_paid: int):
@@ -107,16 +93,19 @@ class Room:
                 return
             nba_player.skipped = True
             self.player_queue.append(self.player_queue.pop(0))
-            self.prev_auction_result['winner'] = ""
+            winner_name = ""
         elif winner_id in self.members:
             winner = self.members[winner_id]
             winner.nba_team.append(self.player_queue.pop(0))
             winner.balance -= price_paid
             winner.compute_score()
-            self.prev_auction_result['winner'] = winner.name
+            winner_name = winner.name
 
-        self.prev_auction_result['nba_player'] = nba_player
-        self.prev_auction_result['price_paid'] = price_paid
+        self.prev_auction_result = PrevAuctionResult(
+            winner=winner_name,
+            nba_player=nba_player,
+            price_paid=price_paid
+        )
         if not self.player_queue:
             self.prev_game_final = copy.deepcopy(list(self.members.values()))
             self._game_finished_reset()
@@ -134,10 +123,9 @@ class Room:
             player.balance = 100
             player.score = 0.0
 
-@dataclass
-class Player:
+class Player(BaseModel):
     name: str
-    nba_team: list[NBAPlayer] = field(default_factory=list)
+    nba_team: list[NBAPlayer] = Field(default_factory=list)
     balance: int = 100
     score: float = 0.0
 
@@ -154,3 +142,8 @@ class Player:
         score = pts * ast * reb * blk * stl * ts / (tov ** 0.5)
         self.score = score
         return score
+
+class PrevAuctionResult(BaseModel):
+    winner: str
+    nba_player: NBAPlayer
+    price_paid: int
