@@ -1,5 +1,4 @@
 from game import Auction, NBAPlayer
-from itertools import product
 from pydantic import BaseModel, Field
 import random
 import time
@@ -110,7 +109,7 @@ class Room(BaseModel):
             winner.nba_team.append(self.player_queue.pop(0))
             winner.balance -= price_paid
             unfilled_positions = winner.best_lineup() # Call best_lineup() after appending the new player to nba_team
-            winner.compute_score(unfilled_positions, 1 / 2 ** (self.missing_position_penalty / 2))
+            winner.compute_score(unfilled_positions, 1 / 2 ** (self.missing_position_penalty / 4))
             winner_name = winner.name
 
         self.prev_auction_result = PrevAuctionResult(
@@ -162,49 +161,57 @@ class Player(BaseModel):
 
     def best_lineup(self) -> int:
         """
-        Assigns each player to at most one position slot (guard/forward/center)
-        to minimize the number of unmet requirements (>=2 guards, >=2 forwards,
-        >=1 center). A player can only fill a slot they're eligible for, and
-        each player fills at most one slot.
+        Assigns each player to at most one position slot via maximum bipartite
+        matching, minimizing total shortfall = sum over categories of
+        max(0, required - filled). The shortfall drives the position-bonus
+        penalty multiplier in compute_score.
 
-        Populates self.lineup dict mapping 'guard'/'forward'/'center' -> list of
-        indices of players in self.nba_team placed there
+        Populates self.lineup: dict mapping 'guard'/'forward'/'center' -> list
+        of indices into self.nba_team. Every player appears under exactly one
+        position -- the one they're contributing the bonus toward, or their
+        first eligible position if the requirement was already filled by
+        someone else.
 
-        Returns
-        - unfulfilled_count: how many of the 3 requirement categories are still unmet
+        Returns the total shortfall (0 = fully satisfied).
         """
-        options_per_player = []
-        for player in self.nba_team:
-            choices = []
-            if player.guard:
-                choices.append('guard')
-            if player.forward:
-                choices.append('forward')
-            if player.center:
-                choices.append('center')
-            options_per_player.append(choices)
+        occupants = {pos: [] for pos in _REQUIRED_POS_COUNTS}
 
-        best_assignment = None
-        best_unfulfilled = 4
+        def eligible_positions(idx):
+            player = self.nba_team[idx]
+            return [pos for pos in ('guard', 'forward', 'center') if getattr(player, pos)]
 
-        for assignment in product(*options_per_player):
-            counts = {'guard': 0, 'forward': 0, 'center': 0}
-            for pos in assignment:
-                counts[pos] += 1
+        def try_assign(idx, visited):
+            for pos in eligible_positions(idx):
+                if pos in visited:
+                    continue
+                visited.add(pos)
+                if len(occupants[pos]) < _REQUIRED_POS_COUNTS[pos]:
+                    occupants[pos].append(idx)
+                    return True
+                for occupant_idx in occupants[pos]:
+                    if try_assign(occupant_idx, visited):
+                        occupants[pos].remove(occupant_idx)
+                        occupants[pos].append(idx)
+                        return True
+            return False
 
-            unfulfilled = len([pos for pos in counts if counts[pos] < _REQUIRED_POS_COUNTS[pos]])
+        for idx in range(len(self.nba_team)):
+            try_assign(idx, set())
 
-            if unfulfilled < best_unfulfilled:
-                best_unfulfilled = unfulfilled
-                best_assignment = assignment
+        counted = set(i for v in occupants.values() for i in v)
+        shortfall = sum(_REQUIRED_POS_COUNTS.values()) - len(counted)
 
-        lineup = {'guard': [], 'forward': [], 'center': []}
-        for idx, pos in enumerate(best_assignment):
-            lineup[pos].append(idx)
+        lineup = {pos: list(occupants[pos]) for pos in _REQUIRED_POS_COUNTS}
+        for idx, player in enumerate(self.nba_team):
+            if idx in counted:
+                continue
+            for pos in ('guard', 'forward', 'center'):
+                if getattr(player, pos):
+                    lineup[pos].append(idx)
+                    break
+
         self.lineup = lineup
-
-        return best_unfulfilled
-
+        return shortfall
 
 class PrevAuctionResult(BaseModel):
     winner: str
