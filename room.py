@@ -142,6 +142,7 @@ class Player(BaseModel):
     name: str
     nba_team: list[NBAPlayer] = Field(default_factory=list)
     lineup: dict[str, list[int]] = Field(default_factory=dict)
+    avg_stats: dict[str, float] = Field(default_factory=dict)
     balance: int = 100
     score: float = 0.0
 
@@ -157,6 +158,11 @@ class Player(BaseModel):
             ts += player.ts
         score = pts * ast * reb * blk ** 0.8 * stl ** 0.8 * ts ** 1.5 / (tov ** 0.5) * penalty ** unfilled_positions
         self.score = score
+        c = len(self.nba_team)
+        self.avg_stats = {
+            'pts': pts/c, 'ast': ast/c, 'reb': reb/c, 'blk': blk/c,
+            'stl': stl/c, 'tov': tov/c, 'ts': ts/c
+        }
         return score
 
     def best_lineup(self) -> int:
