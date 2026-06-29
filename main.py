@@ -56,6 +56,8 @@ async def join_room(room_code: str, request: JoinRoomRequest):
         room = await redis_store.load_room(room_code)
         if room is None:
             return {'success': False, 'failure_msg': Failure.ROOM_CODE_NOT_FOUND.name}
+        if request.player_name.strip() in {m.name.strip() for m in room.members.values()}:
+            return {'success': False, 'failure_msg': 'NAME_TAKEN'}
         if room.round_num > 0:
             return {'success': False, 'failure_msg': 'GAME_IN_PROGRESS'}
         player_id = str(uuid.uuid4())
