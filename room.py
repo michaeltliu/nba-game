@@ -135,6 +135,7 @@ class Room(BaseModel):
         for player in self.members.values():
             player.nba_team = []
             player.lineup = dict()
+            player.avg_stats = dict()
             player.balance = 100
             player.score = 0.0
 
