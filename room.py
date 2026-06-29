@@ -4,6 +4,7 @@ import random
 import time
 import os
 import copy
+import math
 import pandas as pd
 
 _TOP_PLAYERS_DF: pd.DataFrame = None
@@ -157,7 +158,7 @@ class Player(BaseModel):
             stl += player.stl
             tov += player.tov
             ts += player.ts
-        score = pts * ast * reb * blk ** 0.8 * stl ** 0.8 * ts ** 1.5 / (tov ** 0.5) * penalty ** unfilled_positions
+        score = pts * ast * reb * blk ** 0.2 * stl ** 0.2 * math.sqrt(blk + stl) * ts ** 1.5 / math.sqrt(tov) * penalty ** unfilled_positions
         self.score = score
         c = len(self.nba_team)
         self.avg_stats = {
