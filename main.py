@@ -86,6 +86,11 @@ async def room_status(room_code: str):
             'bids_received': len(room.current_auction.bids) if room.current_auction else 0,
             'prev_auction_result': room.prev_auction_result,
             'prev_game_final': room.prev_game_final,
+            'room_settings': {
+                'missing_position_penalty': room.missing_position_penalty,
+                'bid_timer': room.bid_timer,
+                'additional_players_queued': room.additional_players_queued
+            }
         }
     return status
 
