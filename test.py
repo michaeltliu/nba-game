@@ -1,7 +1,7 @@
 import pandas as pd
 
-players_df = pd.read_csv("/Users/michaeltliu/.cache/kagglehub/datasets/eoinamoore/historical-nba-data-and-player-box-scores/versions/515/Players.csv")
-stats_df = pd.read_csv("/Users/michaeltliu/.cache/kagglehub/datasets/eoinamoore/historical-nba-data-and-player-box-scores/versions/515/PlayerStatistics.csv")
+players_df = pd.read_csv("/Users/michaelliu/.cache/kagglehub/datasets/eoinamoore/historical-nba-data-and-player-box-scores/versions/515/Players.csv")
+stats_df = pd.read_csv("/Users/michaelliu/.cache/kagglehub/datasets/eoinamoore/historical-nba-data-and-player-box-scores/versions/515/PlayerStatistics.csv")
 stats_df['date'] = pd.to_datetime(stats_df['gameDate'])
 stats26 = stats_df[(stats_df['date'].between('2025-10-20', '2026-04-18')) & (stats_df['gameType'].isin(['Regular Season']))].copy()
 
@@ -54,6 +54,9 @@ player_averages['fantasyPoints'] = (
 
 # Filter out players with no valid position
 player_averages = player_averages[player_averages[['guard', 'forward', 'center']].any(axis=1)]
+
+# Filter to players who played 20 or more games
+player_averages = player_averages[player_averages['gamesPlayed'] >= 20]
 
 # Sort players by fantasyPoints descending
 player_averages = player_averages.sort_values(by='fantasyPoints', ascending=False)

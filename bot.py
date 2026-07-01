@@ -48,6 +48,7 @@ def calculate_bid(
     members: list[Player],
     player_queue: list[NBAPlayer],
     missing_position_penalty: int,
+    additional_players: int,
     balance: int,
     current_team: list[NBAPlayer]
 ) -> int:
@@ -68,6 +69,9 @@ def calculate_bid(
         
     if not player_queue:
         return 0
+
+    if len(player_queue) <= k:
+        return 1
         
     current_player = player_queue[0]
     penalty_factor = 1.0 / (2.0 ** (missing_position_penalty / 4.0))
@@ -79,47 +83,51 @@ def calculate_bid(
         shortfall = temp_player.best_lineup()
         return temp_player.compute_score(shortfall, penalty_factor)
         
-    # Restrict our search to the first M players in the queue to keep it fast
-    M = 15
-    candidates = player_queue[:min(len(player_queue), M)]
     
     # 1. For each candidate player P, compute their utility U(P).
     # U(P) is the max score we can get if we draft P next and fill the remaining
     # k-1 slots optimally from the rest of the candidates.
     utilities = {}
-    for P in candidates:
-        other_candidates = [x for x in candidates if x.pid != P.pid]
-        target_k_minus_1 = min(k - 1, len(other_candidates))
+    for P in player_queue:
+        other_players = [x for x in player_queue if x.pid != P.pid]
+        target_k_minus_1 = min(k - 1, len(other_players))
         
         best_score = -1.0
-        if target_k_minus_1 == 0:
-            # We only need 1 player, so the utility is just the score of current_team + P
-            best_score = get_team_score(current_team + [P])
-        else:
-            # Find the best combination of size k-1
-            for subset in itertools.combinations(other_candidates, target_k_minus_1):
-                score = get_team_score(current_team + [P] + list(subset))
-                if score > best_score:
-                    best_score = score
+        for subset in itertools.combinations(other_players, target_k_minus_1):
+            score = get_team_score(current_team + [P] + list(subset))
+            if score > best_score:
+                best_score = score
         utilities[P.pid] = best_score
         
     # 2. Sort candidates by utility descending
-    sorted_candidates = sorted(candidates, key=lambda x: utilities[x.pid], reverse=True)
+    sorted_candidates = sorted(player_queue, key=lambda x: utilities[x.pid], reverse=True)
     
     # Our target players are the top k players
     target_players = sorted_candidates[:k]
     
     # 3. Determine the replacement utility level.
     # The replacement player is the average of the players we don't target.
-    if len(candidates) > k:
-        replacement_players = sorted_candidates[k:]
+    end_index = -additional_players if additional_players else None
+    replacement_players = sorted_candidates[k:end_index]
+    if len(replacement_players):
         u_replacement = sum(utilities[p.pid] for p in replacement_players) / len(replacement_players)
     else:
-        u_replacement = 0.0
+        u_replacement = 0
         
     # 4. Compute the Value Over Replacement V(P) for each player
-    values = {p.pid: max(0.0, utilities[p.pid] - u_replacement) for p in candidates}
-    
+    values = {p.pid: max(0.0, utilities[p.pid] - u_replacement) for p in player_queue}
+
+    # Print VORP table for all candidates
+    print(f"\n{Colors.OKCYAN}--- VORP Breakdown (replacement baseline: {u_replacement:.2f}) ---{Colors.ENDC}")
+    print(f"  {'#':<3} {'Player':<25} {'Pos':<6} {'Utility':>9} {'VORP':>9}  {'Target?'}")
+    target_pids = {p.pid for p in target_players}
+    for rank, p in enumerate(sorted_candidates, start=1):
+        is_target = p.pid in target_pids
+        marker = f"{Colors.OKGREEN}✓{Colors.ENDC}" if is_target else " "
+        current_marker = f" {Colors.WARNING}← current{Colors.ENDC}" if p.pid == current_player.pid else ""
+        print(f"  {rank:<3} {p.name:<25} {format_positions(p):<6} {utilities[p.pid]:>9.2f} {values[p.pid]:>9.2f}  {marker}{current_marker}")
+    print(f"{Colors.OKCYAN}-----------------------------------------------------------{Colors.ENDC}\n")
+
     # If the current player has no value over replacement, we bid 0
     current_player_value = values[current_player.pid]
     if current_player_value <= 0:
@@ -262,12 +270,15 @@ def play_bot(room_code: str, api_url: str, base_name: str):
                         print(f"Our Balance: {Colors.BOLD}${our_player.balance}{Colors.ENDC}")
                         
                         # Compute bid
-                        missing_position_penalty = status['room_settings']['missing_position_penalty']
+                        room_settings = status['room_settings']
+                        missing_position_penalty = room_settings['missing_position_penalty']
+                        additional_players = room_settings['additional_players_queued'] * len(members)
                         bid = calculate_bid(
                             bot_name=bot_name,
                             members=members,
                             player_queue=player_queue,
                             missing_position_penalty=missing_position_penalty,
+                            additional_players=additional_players,
                             balance=our_player.balance,
                             current_team=our_player.nba_team
                         )
