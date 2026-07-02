@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from game import Auction, NBAPlayer
 from pydantic import BaseModel, Field
 import random
@@ -6,6 +8,7 @@ import os
 import copy
 import math
 import pandas as pd
+import bot_strategy
 
 _TOP_PLAYERS_DF: pd.DataFrame = None
 _REQUIRED_POS_COUNTS = {'guard': 2, 'forward': 2, 'center': 1}
@@ -77,6 +80,19 @@ class Room(BaseModel):
     def add_member(self, player_id: str, player_name: str):
         self.members[player_id] = Player(name=player_name)
 
+    def add_bot(self, player_id: str, player_name: str):
+        self.members[player_id] = Player(name=player_name, is_bot=True)
+
+    def next_bot_name(self) -> str:
+        """Generate a unique default name for a newly added bot."""
+        existing = {m.name.strip() for m in self.members.values()}
+        i = 1
+        while True:
+            candidate = f"Bot {i}"
+            if candidate not in existing:
+                return candidate
+            i += 1
+
     def next_round(self):
         self.round_num += 1
         self.current_auction = Auction(
@@ -84,6 +100,43 @@ class Room(BaseModel):
             expected_player_ids=self._expected_bidders(),
             end_ts=time.time() + self.bid_timer
         )
+        self._submit_bot_bids()
+
+    def _submit_bot_bids(self):
+        """Compute and record bids for every bot expected to bid this round.
+
+        The expensive VORP valuation depends only on a bot's current roster and
+        the shared queue, so it is cached per roster signature and reused across
+        bots with identical rosters (notably every bot on the opening round).
+        """
+        if self.current_auction is None:
+            return
+        additional_players = self.additional_players_queued * len(self.members)
+        valuation_cache: dict[tuple[int, ...], object] = {}
+        for player_id in self.current_auction.expected_player_ids:
+            member = self.members.get(player_id)
+            if member is None or not member.is_bot:
+                continue
+            self.current_auction.bids[player_id] = self._compute_bot_bid(
+                member, additional_players, valuation_cache
+            )
+
+    def _compute_bot_bid(self, member: Player, additional_players: int, valuation_cache: dict) -> int:
+        k = 5 - len(member.nba_team)
+        if k <= 0 or not self.player_queue:
+            return 0
+        if len(self.player_queue) <= k:
+            return min(1, member.balance)
+        signature = tuple(sorted(p.pid for p in member.nba_team))
+        if signature not in valuation_cache:
+            valuation_cache[signature] = bot_strategy.evaluate(
+                self.player_queue,
+                self.missing_position_penalty,
+                additional_players,
+                member.nba_team,
+            )
+        bid = bot_strategy.allocate(valuation_cache[signature], member.balance, self.player_queue)
+        return max(0, min(bid, member.balance))
 
     def start_game(self):
         num_players_needed = (5 + self.additional_players_queued) * len(self.members)
@@ -142,6 +195,7 @@ class Room(BaseModel):
 
 class Player(BaseModel):
     name: str
+    is_bot: bool = False
     nba_team: list[NBAPlayer] = Field(default_factory=list)
     lineup: dict[str, list[int]] = Field(default_factory=dict)
     avg_stats: dict[str, float] = Field(default_factory=dict)

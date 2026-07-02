@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from enums import Failure
 from room import Room
 import redis_store
+import asyncio
 import os
 import uuid
 
@@ -66,6 +67,32 @@ async def join_room(room_code: str, request: JoinRoomRequest):
     return {'success': True, 'player_id': player_id}
 
 
+class AddBotRequest(BaseModel):
+    bot_name: str | None = None
+
+@app.post("/rooms/{room_code}/add-bot")
+async def add_bot(
+    room_code: str,
+    request: AddBotRequest,
+    x_player_id: str = Header(...)
+):
+    async with redis_store.room_lock(room_code):
+        room = await redis_store.load_room(room_code)
+        if room is None:
+            return {'success': False, 'failure_msg': Failure.ROOM_CODE_NOT_FOUND.name}
+        if room.owner_id != x_player_id:
+            return {'success': False, 'failure_msg': Failure.REQUIRES_OWNER.name}
+        if room.round_num > 0:
+            return {'success': False, 'failure_msg': 'GAME_IN_PROGRESS'}
+        bot_name = (request.bot_name or "").strip() or room.next_bot_name()
+        if bot_name in {m.name.strip() for m in room.members.values()}:
+            return {'success': False, 'failure_msg': 'NAME_TAKEN'}
+        bot_id = str(uuid.uuid4())
+        room.add_bot(bot_id, bot_name)
+        await redis_store.save_room(room)
+    return {'success': True, 'bot_id': bot_id, 'bot_name': bot_name}
+
+
 @app.get("/rooms/{room_code}/status")
 async def room_status(room_code: str):
     async with redis_store.room_lock(room_code):
@@ -73,9 +100,10 @@ async def room_status(room_code: str):
         if room is None:
             return {'success': False, 'failure_msg': Failure.ROOM_CODE_NOT_FOUND.name}
         if room.round_num > 0:
-            auction_result = room.current_auction.maybe_resolve()
-            if auction_result.resolved:
-                room.handle_auction_end(auction_result.winner_id, auction_result.price_paid)
+            # Resolving an auction advances the round, which triggers bot bid
+            # computation (CPU-heavy); run it off the event loop.
+            resolved = await asyncio.to_thread(_maybe_advance_auction, room)
+            if resolved:
                 await redis_store.save_room(room)
         status = {
             'success': True,
@@ -105,7 +133,9 @@ async def start_game(room_code: str, x_player_id: str = Header(...)):
             return {'success': False, 'failure_msg': Failure.REQUIRES_OWNER.name}
         if room.round_num > 0:
             return {'success': False, 'failure_msg': 'ALREADY_STARTED'}
-        room.start_game()
+        # Starting the game seeds the queue and computes opening bot bids
+        # (CPU-heavy); run it off the event loop.
+        await asyncio.to_thread(room.start_game)
         await redis_store.save_room(room)
     return {'success': True}
 
@@ -134,8 +164,20 @@ async def submit_bid(
         if len(room.members[x_player_id].nba_team) >= 5:
             return {'success': False, 'failure_msg': 'ROSTER_FULL'}
         room.current_auction.bids[x_player_id] = bid
-        auction_result = room.current_auction.maybe_resolve()
-        if auction_result.resolved:
-            room.handle_auction_end(auction_result.winner_id, auction_result.price_paid)
+        # Resolving the auction may advance the round and compute bot bids
+        # (CPU-heavy); run it off the event loop.
+        await asyncio.to_thread(_maybe_advance_auction, room)
         await redis_store.save_room(room)
     return {'success': True}
+
+
+def _maybe_advance_auction(room: Room) -> bool:
+    """Resolve the current auction if ready, advancing to the next round (which
+    computes bot bids). Returns True if the auction resolved."""
+    if room.current_auction is None:
+        return False
+    auction_result = room.current_auction.maybe_resolve()
+    if auction_result.resolved:
+        room.handle_auction_end(auction_result.winner_id, auction_result.price_paid)
+        return True
+    return False
