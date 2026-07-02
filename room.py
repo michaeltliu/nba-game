@@ -80,18 +80,15 @@ class Room(BaseModel):
     def add_member(self, player_id: str, player_name: str):
         self.members[player_id] = Player(name=player_name)
 
-    def add_bot(self, player_id: str, player_name: str):
-        self.members[player_id] = Player(name=player_name, is_bot=True)
+    def add_bot(self, player_id: str, player_name: str, difficulty: str):
+        self.members[player_id] = Player(name=player_name, is_bot=True, bot_difficulty=difficulty)
 
-    def next_bot_name(self) -> str:
-        """Generate a unique default name for a newly added bot."""
-        existing = {m.name.strip() for m in self.members.values()}
-        i = 1
-        while True:
-            candidate = f"Bot {i}"
-            if candidate not in existing:
-                return candidate
-            i += 1
+    def has_bot_difficulty(self, difficulty: str) -> bool:
+        return any(m.is_bot and m.bot_difficulty == difficulty for m in self.members.values())
+
+    def default_bot_name(self, difficulty: str) -> str:
+        """Default display name for a bot of the given difficulty."""
+        return f"{difficulty.capitalize()} Bot"
 
     def next_round(self):
         self.round_num += 1
@@ -105,38 +102,27 @@ class Room(BaseModel):
     def _submit_bot_bids(self):
         """Compute and record bids for every bot expected to bid this round.
 
-        The expensive VORP valuation depends only on a bot's current roster and
-        the shared queue, so it is cached per roster signature and reused across
-        bots with identical rosters (notably every bot on the opening round).
+        Each bot bids using the strategy for its difficulty. A room holds at
+        most one bot per difficulty (three total), and only the ``hard``
+        strategy is combinatorially expensive, so at most one costly valuation
+        runs per round.
         """
         if self.current_auction is None:
             return
         additional_players = self.additional_players_queued * len(self.members)
-        valuation_cache: dict[tuple[int, ...], object] = {}
         for player_id in self.current_auction.expected_player_ids:
             member = self.members.get(player_id)
             if member is None or not member.is_bot:
                 continue
-            self.current_auction.bids[player_id] = self._compute_bot_bid(
-                member, additional_players, valuation_cache
+            bid = bot_strategy.compute_bid(
+                member.bot_difficulty,
+                player_queue=self.player_queue,
+                missing_position_penalty=self.missing_position_penalty,
+                additional_players=additional_players,
+                balance=member.balance,
+                current_team=member.nba_team,
             )
-
-    def _compute_bot_bid(self, member: Player, additional_players: int, valuation_cache: dict) -> int:
-        k = 5 - len(member.nba_team)
-        if k <= 0 or not self.player_queue:
-            return 0
-        if len(self.player_queue) <= k:
-            return min(1, member.balance)
-        signature = tuple(sorted(p.pid for p in member.nba_team))
-        if signature not in valuation_cache:
-            valuation_cache[signature] = bot_strategy.evaluate(
-                self.player_queue,
-                self.missing_position_penalty,
-                additional_players,
-                member.nba_team,
-            )
-        bid = bot_strategy.allocate(valuation_cache[signature], member.balance, self.player_queue)
-        return max(0, min(bid, member.balance))
+            self.current_auction.bids[player_id] = max(0, min(bid, member.balance))
 
     def start_game(self):
         num_players_needed = (5 + self.additional_players_queued) * len(self.members)
@@ -196,6 +182,7 @@ class Room(BaseModel):
 class Player(BaseModel):
     name: str
     is_bot: bool = False
+    bot_difficulty: str | None = None
     nba_team: list[NBAPlayer] = Field(default_factory=list)
     lineup: dict[str, list[int]] = Field(default_factory=dict)
     avg_stats: dict[str, float] = Field(default_factory=dict)

@@ -1,38 +1,32 @@
-"""Shared bot bidding strategy.
+"""Shared bot bidding strategies.
 
-This module contains the pure bid-computation logic used by the API to drive
-in-room bots. It has no console/printing side effects so it can be safely
-called from within request handling.
+Each difficulty level has its own ``compute_bid`` implementation. They all share
+the same signature so the API can dispatch by difficulty:
 
-The logic uses a Value Over Replacement Player (VORP) style valuation:
+    compute_bid(difficulty, player_queue, missing_position_penalty,
+                additional_players, balance, current_team) -> int
 
-1. Computes the maximum potential team score for each candidate player.
-2. Establishes a replacement baseline (average of non-target players).
-3. Calculates each player's value over replacement.
-4. Allocates the budget across players proportional to their value. This
-   ensures we bid on solid players even if they aren't in our absolute
-   "dream team", preventing opponents from getting them for free.
+Difficulties (cheapest -> most expensive to compute):
 
-The valuation step (1-3) is the expensive part and depends only on the current
-roster and the shared player queue -- not on the bidder's balance. It is split
-out from the cheap balance-dependent allocation (step 4) so that several bots
-sharing an identical roster (e.g. every bot on the first round) can reuse a
-single valuation.
+* ``easy``   - naive: spread the remaining budget across open slots, scaled by
+               the current player's raw counting stats, with a little jitter.
+               No team scoring at all; trivial cost.
+* ``medium`` - greedy marginal value: score the current roster plus each single
+               candidate and bid proportional to the current player's marginal
+               contribution. O(n) team scorings; cheap.
+* ``hard``   - Value Over Replacement Player (VORP) with full k-1 lookahead. This
+               is the only strategy with combinatorial cost, and a room may hold
+               at most one hard bot.
+
+All strategies return an integer bid clamped to ``[0, balance]``.
 """
 
 import itertools
+import random
 
 from game import NBAPlayer
 
-
-class Valuation:
-    """Precomputed VORP valuation for a given roster + candidate queue."""
-
-    def __init__(self, values, current_player_value, sum_target_v, k):
-        self.values = values
-        self.current_player_value = current_player_value
-        self.sum_target_v = sum_target_v
-        self.k = k
+DIFFICULTIES = ("easy", "medium", "hard")
 
 
 def _team_scorer(missing_position_penalty: int):
@@ -51,19 +45,103 @@ def _team_scorer(missing_position_penalty: int):
     return get_team_score
 
 
-def evaluate(
+def _proportional_bid(values: dict, current_pid: int, target_players: list, balance: int, k: int) -> int:
+    """Shared budget-allocation step used by the medium and hard strategies.
+
+    Bids proportional to the current player's value relative to the sum of the
+    top-k target values, falling back to an even split when all targets tie.
+    """
+    current_value = values[current_pid]
+    if current_value <= 0:
+        return 0
+
+    sum_target_v = sum(values[p.pid] for p in target_players)
+    if sum_target_v == 0:
+        is_target = any(p.pid == current_pid for p in target_players)
+        bid = max(1, balance // k) if is_target else 0
+    else:
+        bid = int(round(balance * (current_value / sum_target_v)))
+
+    # If we want this player (value > 0) and have budget, bid at least $1 so we
+    # don't lose to a $0 bid.
+    if bid == 0 and balance > 0:
+        bid = 1
+
+    return max(0, min(bid, balance))
+
+
+def compute_bid_easy(
     player_queue: list[NBAPlayer],
     missing_position_penalty: int,
     additional_players: int,
+    balance: int,
     current_team: list[NBAPlayer],
-) -> Valuation | None:
-    """Run the expensive VORP valuation for the player at the front of the
-    queue given ``current_team``. Returns ``None`` when no meaningful
-    valuation applies (roster full, empty queue, or fewer candidates than
-    open slots)."""
+) -> int:
     k = 5 - len(current_team)
-    if k <= 0 or not player_queue or len(player_queue) <= k:
-        return None
+    if k <= 0 or not player_queue:
+        return 0
+    if len(player_queue) <= k:
+        return min(1, balance)
+
+    current_player = player_queue[0]
+
+    def raw(p: NBAPlayer) -> float:
+        return p.pts + p.reb + p.ast + p.stl + p.blk
+
+    max_raw = max((raw(p) for p in player_queue), default=0.0) or 1.0
+    desirability = raw(current_player) / max_raw  # ~0..1
+
+    per_slot = balance / k
+    bid = int(round(per_slot * desirability * random.uniform(0.5, 1.1)))
+
+    # Occasionally throw in a token $1 for a decent player even if rounding
+    # zeroed us out.
+    if bid <= 0 and balance > 0 and desirability > 0.4:
+        bid = 1
+
+    return max(0, min(bid, balance))
+
+
+def compute_bid_medium(
+    player_queue: list[NBAPlayer],
+    missing_position_penalty: int,
+    additional_players: int,
+    balance: int,
+    current_team: list[NBAPlayer],
+) -> int:
+    k = 5 - len(current_team)
+    if k <= 0 or not player_queue:
+        return 0
+    if len(player_queue) <= k:
+        return min(1, balance)
+
+    current_player = player_queue[0]
+    get_team_score = _team_scorer(missing_position_penalty)
+
+    base_score = get_team_score(current_team) if current_team else 0.0
+    # Marginal value of adding each candidate to the current roster (no
+    # lookahead over how the remaining slots get filled).
+    values = {
+        p.pid: max(0.0, get_team_score(current_team + [p]) - base_score)
+        for p in player_queue
+    }
+
+    target_players = sorted(player_queue, key=lambda x: values[x.pid], reverse=True)[:k]
+    return _proportional_bid(values, current_player.pid, target_players, balance, k)
+
+
+def compute_bid_hard(
+    player_queue: list[NBAPlayer],
+    missing_position_penalty: int,
+    additional_players: int,
+    balance: int,
+    current_team: list[NBAPlayer],
+) -> int:
+    k = 5 - len(current_team)
+    if k <= 0 or not player_queue:
+        return 0
+    if len(player_queue) <= k:
+        return min(1, balance)
 
     current_player = player_queue[0]
     get_team_score = _team_scorer(missing_position_penalty)
@@ -87,8 +165,8 @@ def evaluate(
     sorted_candidates = sorted(player_queue, key=lambda x: utilities[x.pid], reverse=True)
     target_players = sorted_candidates[:k]
 
-    # 3. Determine the replacement utility level (average of non-targeted
-    # players, excluding the tail that won't realistically be reached).
+    # 3. Replacement utility level (average of non-targeted players, excluding
+    # the tail that won't realistically be reached).
     end_index = -additional_players if additional_players else None
     replacement_players = sorted_candidates[k:end_index]
     if len(replacement_players):
@@ -96,71 +174,33 @@ def evaluate(
     else:
         u_replacement = 0
 
-    # 4. Value Over Replacement V(P) for each player.
+    # 4. Value Over Replacement, then allocate budget proportionally.
     values = {p.pid: max(0.0, utilities[p.pid] - u_replacement) for p in player_queue}
-    sum_target_v = sum(values[p.pid] for p in target_players)
-
-    return Valuation(
-        values=values,
-        current_player_value=values[current_player.pid],
-        sum_target_v=sum_target_v,
-        k=k,
-    )
+    return _proportional_bid(values, current_player.pid, target_players, balance, k)
 
 
-def allocate(valuation: Valuation | None, balance: int, player_queue: list[NBAPlayer]) -> int:
-    """Turn a (possibly shared) valuation into a concrete bid for a bidder with
-    the given balance. Cheap; safe to call once per bot."""
-    if not player_queue:
-        return 0
-
-    if valuation is None:
-        # Either the roster is full (bid 0) or there are no more candidates
-        # than open slots -- in the latter case grab the player for $1.
-        # Distinguish using team size is not available here, so mirror the
-        # original heuristics via compute_bid's guards below.
-        return 0
-
-    current_player_value = valuation.current_player_value
-    if current_player_value <= 0:
-        return 0
-
-    # Allocate budget proportional to value over replacement.
-    if valuation.sum_target_v == 0:
-        # All target players have 0 value over replacement (e.g., all
-        # identical): spend evenly across the open slots.
-        bid = max(1, balance // valuation.k)
-    else:
-        bid = balance * (current_player_value / valuation.sum_target_v)
-        bid = int(round(bid))
-
-    # If we want this player (value > 0) and have budget, bid at least $1 so we
-    # don't lose to a $0 bid.
-    if bid == 0 and balance > 0:
-        bid = 1
-
-    # Never exceed our current balance or go below 0.
-    return max(0, min(bid, balance))
+_STRATEGIES = {
+    "easy": compute_bid_easy,
+    "medium": compute_bid_medium,
+    "hard": compute_bid_hard,
+}
 
 
 def compute_bid(
+    difficulty: str,
     player_queue: list[NBAPlayer],
     missing_position_penalty: int,
     additional_players: int,
     balance: int,
     current_team: list[NBAPlayer],
 ) -> int:
-    """Compute a smart bid for the player at the front of the queue.
-
-    Returns an integer bid clamped to the range [0, balance].
-    """
-    k = 5 - len(current_team)
-    if k <= 0:
-        return 0
-    if not player_queue:
-        return 0
-    if len(player_queue) <= k:
-        return 1
-
-    valuation = evaluate(player_queue, missing_position_penalty, additional_players, current_team)
-    return allocate(valuation, balance, player_queue)
+    """Dispatch to the strategy for ``difficulty``. Unknown difficulties fall
+    back to the medium strategy."""
+    strategy = _STRATEGIES.get(difficulty, compute_bid_medium)
+    return strategy(
+        player_queue=player_queue,
+        missing_position_penalty=missing_position_penalty,
+        additional_players=additional_players,
+        balance=balance,
+        current_team=current_team,
+    )
