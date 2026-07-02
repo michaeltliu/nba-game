@@ -81,10 +81,10 @@ class Room(BaseModel):
         self.members[player_id] = Player(name=player_name)
 
     def add_bot(self, player_id: str, player_name: str, difficulty: str):
-        self.members[player_id] = Player(name=player_name, is_bot=True, bot_difficulty=difficulty)
+        self.members[player_id] = Player(name=player_name, bot_difficulty=difficulty)
 
     def has_bot_difficulty(self, difficulty: str) -> bool:
-        return any(m.is_bot and m.bot_difficulty == difficulty for m in self.members.values())
+        return any(m.bot_difficulty == difficulty for m in self.members.values())
 
     def default_bot_name(self, difficulty: str) -> str:
         """Default display name for a bot of the given difficulty."""
@@ -112,7 +112,7 @@ class Room(BaseModel):
         additional_players = self.additional_players_queued * len(self.members)
         for player_id in self.current_auction.expected_player_ids:
             member = self.members.get(player_id)
-            if member is None or not member.is_bot:
+            if member is None or member.bot_difficulty is None:
                 continue
             bid = bot_strategy.compute_bid(
                 member.bot_difficulty,
@@ -181,7 +181,6 @@ class Room(BaseModel):
 
 class Player(BaseModel):
     name: str
-    is_bot: bool = False
     bot_difficulty: str | None = None
     nba_team: list[NBAPlayer] = Field(default_factory=list)
     lineup: dict[str, list[int]] = Field(default_factory=dict)
