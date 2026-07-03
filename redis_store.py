@@ -8,9 +8,7 @@ from room import Room
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 ROOM_TTL_SECONDS = 60 * 60  # rooms auto-expire 1hr after last write
-# Advancing a round computes bids for every bot, which is CPU-heavy on the
-# opening round, so the room lock is held longer than a trivial mutation.
-ROOM_LOCK_TIMEOUT = int(os.environ.get("ROOM_LOCK_TIMEOUT", "30"))
+ROOM_LOCK_TIMEOUT = 10
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
 

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from game import Auction, NBAPlayer
 from pydantic import BaseModel, Field
 import random
@@ -88,7 +86,7 @@ class Room(BaseModel):
 
     def default_bot_name(self, difficulty: str) -> str:
         """Default display name for a bot of the given difficulty."""
-        return f"{difficulty.capitalize()} Bot"
+        return f"{difficulty.capitalize()}Bot"
 
     def next_round(self):
         self.round_num += 1
@@ -100,15 +98,7 @@ class Room(BaseModel):
         self._submit_bot_bids()
 
     def _submit_bot_bids(self):
-        """Compute and record bids for every bot expected to bid this round.
-
-        Each bot bids using the strategy for its difficulty. A room holds at
-        most one bot per difficulty (three total), and only the ``hard``
-        strategy is combinatorially expensive, so at most one costly valuation
-        runs per round.
-        """
-        if self.current_auction is None:
-            return
+        """Compute and record bids for every bot expected to bid this round."""
         additional_players = self.additional_players_queued * len(self.members)
         for player_id in self.current_auction.expected_player_ids:
             member = self.members.get(player_id)
