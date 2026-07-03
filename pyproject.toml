@@ -13,4 +13,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["main", "game", "enums", "room", "test"]
+py-modules = ["main", "game", "enums", "room", "test", "bot_strategy"]

@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from enums import Failure
 from room import Room
+import bot_strategy
+import random
 import redis_store
 import os
 import uuid
@@ -59,11 +61,47 @@ async def join_room(room_code: str, request: JoinRoomRequest):
         if request.player_name.strip() in {m.name.strip() for m in room.members.values()}:
             return {'success': False, 'failure_msg': 'NAME_TAKEN'}
         if room.round_num > 0:
-            return {'success': False, 'failure_msg': 'GAME_IN_PROGRESS'}
+            return {'success': False, 'failure_msg': Failure.GAME_IN_PROGRESS.name}
         player_id = str(uuid.uuid4())
         room.add_member(player_id, request.player_name)
         await redis_store.save_room(room)
     return {'success': True, 'player_id': player_id}
+
+
+class AddBotRequest(BaseModel):
+    difficulty: str
+
+@app.post("/rooms/{room_code}/add-bot")
+async def add_bot(
+    room_code: str,
+    request: AddBotRequest,
+    x_player_id: str = Header(...)
+):
+    difficulty = request.difficulty
+    if difficulty not in bot_strategy.DIFFICULTIES:
+        return {'success': False, 'failure_msg': 'INVALID_DIFFICULTY'}
+    async with redis_store.room_lock(room_code):
+        room = await redis_store.load_room(room_code)
+        if room is None:
+            return {'success': False, 'failure_msg': Failure.ROOM_CODE_NOT_FOUND.name}
+        if room.owner_id != x_player_id:
+            return {'success': False, 'failure_msg': Failure.REQUIRES_OWNER.name}
+        if room.round_num > 0:
+            return {'success': False, 'failure_msg': Failure.GAME_IN_PROGRESS.name}
+        if room.has_bot_difficulty(difficulty):
+            return {'success': False, 'failure_msg': 'DIFFICULTY_ALREADY_ADDED'}
+        bot_name = room.default_bot_name(difficulty)
+        temp_name = bot_name
+        counter = 0
+        while bot_name in {m.name.strip() for m in room.members.values()}:
+            if counter > 5:
+                return {'success': False, 'failure_msg': 'NAME_TAKEN'}
+            bot_name = temp_name + str(random.randint(1, 100))
+            counter += 1
+        bot_id = str(uuid.uuid4())
+        room.add_bot(bot_id, bot_name, difficulty)
+        await redis_store.save_room(room)
+    return {'success': True, 'bot_name': bot_name}
 
 
 @app.get("/rooms/{room_code}/status")

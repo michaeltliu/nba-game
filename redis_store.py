@@ -8,6 +8,7 @@ from room import Room
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 ROOM_TTL_SECONDS = 60 * 60  # rooms auto-expire 1hr after last write
+ROOM_LOCK_TIMEOUT = 10
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -37,4 +38,4 @@ async def create_room_with_unique_code(room_factory: Callable[[str], Room]) -> R
 
 def room_lock(room_code: str) -> Lock:
     """Use as: async with room_lock(room_code): ..."""
-    return r.lock(_lock_key(room_code), timeout=5)
+    return r.lock(_lock_key(room_code), timeout=ROOM_LOCK_TIMEOUT)

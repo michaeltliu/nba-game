@@ -6,6 +6,7 @@ import os
 import copy
 import math
 import pandas as pd
+import bot_strategy
 
 _TOP_PLAYERS_DF: pd.DataFrame = None
 _REQUIRED_POS_COUNTS = {'guard': 2, 'forward': 2, 'center': 1}
@@ -77,6 +78,16 @@ class Room(BaseModel):
     def add_member(self, player_id: str, player_name: str):
         self.members[player_id] = Player(name=player_name)
 
+    def add_bot(self, player_id: str, player_name: str, difficulty: str):
+        self.members[player_id] = Player(name=player_name, bot_difficulty=difficulty)
+
+    def has_bot_difficulty(self, difficulty: str) -> bool:
+        return any(m.bot_difficulty == difficulty for m in self.members.values())
+
+    def default_bot_name(self, difficulty: str) -> str:
+        """Default display name for a bot of the given difficulty."""
+        return f"{difficulty.capitalize()}Bot"
+
     def next_round(self):
         self.round_num += 1
         self.current_auction = Auction(
@@ -84,6 +95,24 @@ class Room(BaseModel):
             expected_player_ids=self._expected_bidders(),
             end_ts=time.time() + self.bid_timer
         )
+        self._submit_bot_bids()
+
+    def _submit_bot_bids(self):
+        """Compute and record bids for every bot expected to bid this round."""
+        additional_players = self.additional_players_queued * len(self.members)
+        for player_id in self.current_auction.expected_player_ids:
+            member = self.members.get(player_id)
+            if member is None or member.bot_difficulty is None:
+                continue
+            bid = bot_strategy.compute_bid(
+                member.bot_difficulty,
+                player_queue=self.player_queue,
+                missing_position_penalty=self.missing_position_penalty,
+                additional_players=additional_players,
+                balance=member.balance,
+                current_team=member.nba_team,
+            )
+            self.current_auction.bids[player_id] = max(0, min(bid, member.balance))
 
     def start_game(self):
         num_players_needed = (5 + self.additional_players_queued) * len(self.members)
@@ -142,6 +171,7 @@ class Room(BaseModel):
 
 class Player(BaseModel):
     name: str
+    bot_difficulty: str | None = None
     nba_team: list[NBAPlayer] = Field(default_factory=list)
     lineup: dict[str, list[int]] = Field(default_factory=dict)
     avg_stats: dict[str, float] = Field(default_factory=dict)
