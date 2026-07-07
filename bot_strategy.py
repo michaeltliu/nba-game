@@ -113,7 +113,10 @@ def compute_bid_easy(
     def vorp(u: float, avg: float) -> float:
         return max(0, u - avg)
     
-    vorp_share = vorp(u_current, u_avg) / sum(vorp(u, u_avg) for u in replacement_utilities)
+    vorp_total = sum(vorp(u, u_avg) for u in replacement_utilities)
+    if not vorp_total:
+        return 0
+    vorp_share = vorp(u_current, u_avg) / vorp_total
     share = vorp_share * min(marginals.values()) / marginals_total
     return max(1, int(balance * share))
 
