@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from game import Auction, NBAPlayer
 from player import Player
 from pydantic import BaseModel, Field
