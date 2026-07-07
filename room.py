@@ -103,14 +103,15 @@ class Room(BaseModel):
             member = self.members.get(player_id)
             if member is None or member.bot_difficulty is None:
                 continue
-            bid = bot_strategy.compute_bid(
-                member.bot_difficulty,
-                player_queue=self.player_queue,
+            bot_inputs = bot_strategy.BotInputs(
                 missing_position_penalty=self.missing_position_penalty,
                 additional_players=additional_players,
-                balance=member.balance,
+                room_players=list(self.members.values()),
+                player_queue=self.player_queue,
                 current_team=member.nba_team,
+                balance=member.balance,
             )
+            bid = bot_strategy.compute_bid(member.bot_difficulty, bot_inputs)
             self.current_auction.bids[player_id] = max(0, min(bid, member.balance))
 
     def start_game(self):
