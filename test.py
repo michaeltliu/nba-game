@@ -38,14 +38,14 @@ player_averages = player_averages.merge(players_positions, on='personId', how='l
 player_averages[['guard', 'forward', 'center']] = player_averages[['guard', 'forward', 'center']].fillna(0).astype(int)
 
 # Calculate True Shooting percentage (TS%)
-denom = 2 * (player_averages['fieldGoalsAttempted'] + 0.44 * player_averages['freeThrowsAttempted'])
-player_averages['ts'] = player_averages['points'] / denom
+player_averages['trueShootingAttempts'] = player_averages['fieldGoalsAttempted'] + 0.44 * player_averages['freeThrowsAttempted']
+player_averages['ts'] = player_averages['points'] / (2 * player_averages['trueShootingAttempts'])
 player_averages['ts'] = player_averages['ts'].fillna(0.0)
 
 # Calculate Fantasy Points
 player_averages['fantasyPoints'] = (
     player_averages['points'] +
-    player_averages['reboundsTotal'] +
+    1.5 * player_averages['reboundsTotal'] +
     1.5 * player_averages['assists'] +
     4 * player_averages['steals'] +
     4 * player_averages['blocks'] -

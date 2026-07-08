@@ -14,7 +14,7 @@ class Player(BaseModel):
     score: float = 0.0
 
     def compute_score(self, unfilled_positions: int, penalty: float) -> float:
-        pts, ast, reb, blk, stl, tov, ts = [0] * 7
+        pts, ast, reb, blk, stl, tov, tsm, tsa = [0] * 8
         for player in self.nba_team:
             pts += player.pts
             ast += player.ast
@@ -22,13 +22,15 @@ class Player(BaseModel):
             blk += player.blk
             stl += player.stl
             tov += player.tov
-            ts += player.ts
-        score = pts * ast * reb * blk ** 0.2 * stl ** 0.2 * math.sqrt(blk + stl) * ts ** 1.5 / math.sqrt(tov) * penalty ** unfilled_positions
+            tsm += player.ts * player.tsa
+            tsa += player.tsa
+        ts = tsm/tsa
+        score = pts * ast * reb * blk ** 0.2 * stl ** 0.2 * (blk + stl) ** 0.4 * ts ** 1.5 / math.sqrt(tov) * penalty ** unfilled_positions
         self.score = score
         c = len(self.nba_team)
         self.avg_stats = {
             'pts': pts/c, 'ast': ast/c, 'reb': reb/c, 'blk': blk/c,
-            'stl': stl/c, 'tov': tov/c, 'ts': ts/c
+            'stl': stl/c, 'tov': tov/c, 'ts': ts
         }
         return score
 

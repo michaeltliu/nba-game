@@ -51,4 +51,5 @@ class NBAPlayer(BaseModel):
     stl: float
     tov: float
     ts: float
+    tsa: float
     skipped: int = 0

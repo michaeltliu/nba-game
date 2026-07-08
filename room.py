@@ -40,7 +40,8 @@ def get_sampled_players(num_players_needed: int) -> list[NBAPlayer]:
             blk=float(row.blocks),
             stl=float(row.steals),
             tov=float(row.turnovers),
-            ts=float(row.ts)
+            ts=float(row.ts),
+            tsa=float(row.trueShootingAttempts)
         )
         for row in sampled_df.itertuples(index=False)
     ]
