@@ -6,118 +6,12 @@ from pydantic import BaseModel
 
 DIFFICULTIES = ("easy", "medium", "hard")
 SUBSTITUTION_THRESHOLD = 0.84
-MAX_CANDIDATES_RATIO = 5
 
-def _team_scorer(missing_position_penalty: int):
-    penalty_factor = 1.0 / (2.0 ** (missing_position_penalty / 4.0))
-    scorer = Player(name="__scorer__")
-
-    def get_team_score(team: list[NBAPlayer]) -> float:
-        scorer.nba_team = team
-        return scorer.compute_score(scorer.best_lineup(), penalty_factor)
-
-    return get_team_score
-
-def compute_bid_easy(
-    missing_position_penalty: int,
-    additional_players: int,
-    room_players: list[Player],
-    player_queue: list[NBAPlayer],
-    current_team: list[NBAPlayer],
-    balance: int,
-    **kwargs
-) -> int:
-    k = 5 - len(current_team)
-    if k <= 0 or not player_queue or balance <= 0:
-        return 0
-    # We are forced to take all remaining players in the queue.
-    if len(player_queue) <= k:
-        return 1
-
-    get_team_score = _team_scorer(missing_position_penalty)
-
-    def team_score(extra: list[NBAPlayer]) -> float:
-        return get_team_score(current_team + extra)
-
-    def solo_score(player: NBAPlayer) -> float:
-        return get_team_score([player])
-
-    def pool_minus(pool: list[NBAPlayer], minus: NBAPlayer) -> list[NBAPlayer]:
-        return [p for p in pool if p.pid != minus.pid]
-
-    def best_team(pool: list[NBAPlayer], spots_remaining: int) -> tuple[float, list[NBAPlayer]]:
-        best_score = 0
-        best_combo: tuple[NBAPlayer] = ()
-        for combo in itertools.combinations(pool, spots_remaining):
-            s = team_score(list(combo))
-            if s > best_score:
-                best_score = s
-                best_combo = combo
-        return best_score, list(best_combo)
-
-    def best_team_including(pool: list[NBAPlayer], spots_remaining: int, including: NBAPlayer) -> float:
-        cands = pool_minus(pool, including)
-        return max(team_score(list(combo) + [including]) for combo in itertools.combinations(cands, spots_remaining - 1))
-
-    current_player = player_queue[0]
-
-    # Prune player_queue to strongest candidates, ensure current player
-    # is included and required position counts are met.
-    ranked = sorted(player_queue, key=solo_score, reverse=True)
-    pool = ranked[:MAX_CANDIDATES_RATIO * len(room_players)]
-    pool_ids = {p.pid for p in pool}
-    if current_player.pid not in pool_ids:
-        pool.append(current_player)
-        pool_ids.add(current_player.pid)
-    for pos, need in _REQUIRED_POS_COUNTS.items():
-        have = sum(1 for p in pool if getattr(p, pos))
-        for player in ranked:
-            if have >= need:
-                break
-            if player.pid not in pool_ids and getattr(player, pos):
-                pool.append(player)
-                pool_ids.add(player.pid)
-                have += 1
-
-    u_best, target_team = best_team(pool, k)
-    target_ids = {p.pid for p in target_team}
-    marginals = {
-        t.pid: u_best - best_team(pool_minus(pool, t), k)[0]
-        for t in target_team
-    }
-    marginals_total = sum(marginals.values())
-    if current_player.pid in target_ids:
-        if not marginals_total:
-            share = 1 / k
-        else:
-            share = marginals[current_player.pid] / marginals_total
-        return max(1, int(balance * share))
-
-    non_target_utilities = {
-        p.pid: best_team_including(pool, k, p) for p in pool if p.pid not in target_ids
-    }
-    u_current = non_target_utilities[current_player.pid]
-    end_index = -additional_players if additional_players else None
-    replacement_utilities = sorted(non_target_utilities.values(), reverse=True)[:end_index]
-    u_avg = sum(replacement_utilities) / len(replacement_utilities) if replacement_utilities else 0
-
-    if u_current < u_avg or u_current < SUBSTITUTION_THRESHOLD * u_best:
-        return 0
-
-    def vorp(u: float, avg: float) -> float:
-        return max(0, u - avg)
-    
-    vorp_total = sum(vorp(u, u_avg) for u in replacement_utilities)
-    if not vorp_total:
-        return 0
-    vorp_share = vorp(u_current, u_avg) / vorp_total
-    share = vorp_share * min(marginals.values()) / marginals_total
-    return max(1, int(balance * share))
+# Candidate pool size for exhaustive best-team search. Kept constant
+# regardless of room size so bid computation stays fast.
+_CANDIDATE_POOL_SIZE = 15
 
 # --- Medium bot tunables ---
-# Candidate pool size for the exhaustive best-team search. Kept constant
-# regardless of room size so bid computation stays fast.
-_MEDIUM_POOL_SIZE = 15
 # In a second-price auction the winner pays the runner-up's bid, so bidding
 # above the "fair" proportional share is nearly free upside: it converts
 # close losses into wins without raising the price we actually pay.
@@ -134,10 +28,13 @@ _MEDIUM_DUMP_SNIPE_RATIO = 0.90
 _MEDIUM_ALL_IN_TOP = True
 
 
-def _fast_team_scorer(missing_position_penalty: int):
-    """Returns team_score(stat_tuples) mirroring Player.compute_score +
-    best_lineup, but operating on plain tuples with a memoized position
-    matching so it is fast enough for exhaustive combination search."""
+def _fast_team_scorer(missing_position_penalty: int, base_stats: list[tuple]):
+    """Returns eval(extra_stats) mirroring Player.compute_score + best_lineup.
+
+    Operates on plain tuples with a memoized position-matching shortfall so it
+    is fast enough for exhaustive combination search. Base roster aggregates
+    are precomputed once; each eval only folds in the candidate extras.
+    """
     penalty = 1.0 / (2.0 ** (missing_position_penalty / 4.0))
     shortfall_memo: dict[tuple[int, ...], int] = {}
     caps = (
@@ -146,6 +43,15 @@ def _fast_team_scorer(missing_position_penalty: int):
         _REQUIRED_POS_COUNTS['center'],
     )
     total_required = sum(caps)
+
+    base_pts = base_ast = base_reb = base_blk = base_stl = 0.0
+    base_tov = base_tsm = base_tsa = 0.0
+    base_masks: list[int] = []
+    for s in base_stats:
+        base_pts += s[0]; base_ast += s[1]; base_reb += s[2]; base_blk += s[3]
+        base_stl += s[4]; base_tov += s[5]
+        base_tsm += s[6] * s[7]; base_tsa += s[7]
+        base_masks.append(s[8])
 
     def shortfall(masks: tuple[int, ...]) -> int:
         key = tuple(sorted(masks))
@@ -174,10 +80,11 @@ def _fast_team_scorer(missing_position_penalty: int):
         shortfall_memo[key] = result
         return result
 
-    def team_score(stats: list[tuple]) -> float:
-        pts = ast = reb = blk = stl = tov = tsm = tsa = 0.0
-        masks = []
-        for s in stats:
+    def eval_extras(extras: list[tuple]) -> float:
+        pts, ast, reb, blk, stl = base_pts, base_ast, base_reb, base_blk, base_stl
+        tov, tsm, tsa = base_tov, base_tsm, base_tsa
+        masks = list(base_masks)
+        for s in extras:
             pts += s[0]; ast += s[1]; reb += s[2]; blk += s[3]
             stl += s[4]; tov += s[5]
             tsm += s[6] * s[7]; tsa += s[7]
@@ -191,7 +98,7 @@ def _fast_team_scorer(missing_position_penalty: int):
                 * (blk + stl) ** 0.4 * ts ** 1.5 / math.sqrt(tov))
         return base * penalty ** shortfall(tuple(masks))
 
-    return team_score
+    return eval_extras
 
 
 def _stat_tuple(p: NBAPlayer) -> tuple:
@@ -206,6 +113,132 @@ def _rank_score(p: NBAPlayer) -> float:
             * max(p.blk, 0.05) ** 0.2 * max(p.stl, 0.05) ** 0.2
             * (p.blk + p.stl + 0.05) ** 0.4
             * max(p.ts, 0.1) ** 1.5 / math.sqrt(max(p.tov, 0.25)))
+
+
+def _build_candidate_pool(
+    ranked: list[NBAPlayer],
+    current_team: list[NBAPlayer],
+    ensure_include: NBAPlayer | None = None,
+) -> list[NBAPlayer]:
+    """Top-_CANDIDATE_POOL_SIZE players by rank, plus position coverage fills."""
+    pool = ranked[:_CANDIDATE_POOL_SIZE]
+    pool_ids = {p.pid for p in pool}
+    if ensure_include is not None and ensure_include.pid not in pool_ids:
+        pool.append(ensure_include)
+        pool_ids.add(ensure_include.pid)
+    for pos, need in _REQUIRED_POS_COUNTS.items():
+        have = (sum(1 for p in pool if getattr(p, pos))
+                + sum(1 for p in current_team if getattr(p, pos)))
+        for cand in ranked:
+            if have >= need:
+                break
+            if cand.pid not in pool_ids and getattr(cand, pos):
+                pool.append(cand)
+                pool_ids.add(cand.pid)
+                have += 1
+    return pool
+
+
+def _make_search(
+    missing_position_penalty: int,
+    current_team: list[NBAPlayer],
+    cand_stats: list[tuple]
+):
+    """Build memoized eval_team / best_team over candidate indices."""
+    eval_extras = _fast_team_scorer(
+        missing_position_penalty, [_stat_tuple(p) for p in current_team]
+    )
+    eval_memo: dict[frozenset[int], float] = {}
+
+    def eval_team(extra_indices: tuple[int]) -> float:
+        key = frozenset(extra_indices)
+        cached = eval_memo.get(key)
+        if cached is not None:
+            return cached
+        score = eval_extras([cand_stats[i] for i in extra_indices])
+        eval_memo[key] = score
+        return score
+
+    def best_team(indices: tuple[int], choose: int, forced: tuple[int] = ()) -> tuple[float, tuple[int, ...]]:
+        best_score, best_combo = 0, ()
+        for combo in itertools.combinations(indices, choose):
+            s = eval_team(forced + combo)
+            if s > best_score:
+                best_score, best_combo = s, combo
+        return best_score, best_combo
+
+    return best_team
+
+
+def compute_bid_easy(
+    missing_position_penalty: int,
+    additional_players: int,
+    room_players: list[Player],
+    player_queue: list[NBAPlayer],
+    current_team: list[NBAPlayer],
+    balance: int,
+) -> int:
+    k = 5 - len(current_team)
+    if k <= 0 or not player_queue or balance <= 0:
+        return 0
+    # We are forced to take all remaining players in the queue.
+    if len(player_queue) <= k:
+        return 1
+
+    current = player_queue[0]
+    ranked = sorted(player_queue, key=_rank_score, reverse=True)
+    pool = _build_candidate_pool(ranked, current_team, ensure_include=current)
+
+    cand_stats = [_stat_tuple(p) for p in pool]
+    all_indices = tuple(range(len(cand_stats)))
+    current_idx = next(i for i, p in enumerate(pool) if p.pid == current.pid)
+    best_team = _make_search(missing_position_penalty, current_team, cand_stats)
+
+    u_best, target = best_team(all_indices, k)
+    target_set = set(target)
+
+    marginals = {}
+    for t in target:
+        others = tuple(i for i in all_indices if i != t)
+        marginals[t] = u_best - best_team(others, k)[0]
+    marginals_total = sum(marginals.values())
+
+    if current_idx in target_set:
+        if not marginals_total:
+            share = 1 / k
+        else:
+            share = marginals[current_idx] / marginals_total
+        return max(1, int(balance * share))
+
+    # Score current first so we can bail before evaluating every non-target.
+    others = tuple(i for i in all_indices if i != current_idx)
+    u_current = best_team(others, k - 1, forced=(current_idx,))[0]
+    if u_current < SUBSTITUTION_THRESHOLD * u_best:
+        return 0
+
+    non_target_utilities = {current_idx: u_current}
+    for i in all_indices:
+        if i in target_set or i == current_idx:
+            continue
+        others = tuple(j for j in all_indices if j != i)
+        non_target_utilities[i] = best_team(others, k - 1, forced=(i,))[0]
+
+    end_index = -additional_players if additional_players else None
+    replacement_utilities = sorted(non_target_utilities.values(), reverse=True)[:end_index]
+    u_avg = sum(replacement_utilities) / len(replacement_utilities) if replacement_utilities else 0
+
+    if u_current < u_avg:
+        return 0
+
+    def vorp(u: float) -> float:
+        return max(0.0, u - u_avg)
+
+    vorp_total = sum(vorp(u) for u in replacement_utilities)
+    if not vorp_total or not marginals_total:
+        return 0
+    vorp_share = vorp(u_current) / vorp_total
+    share = vorp_share * min(marginals.values()) / marginals_total
+    return max(1, int(balance * share))
 
 
 def compute_bid_medium(
@@ -244,40 +277,12 @@ def compute_bid_medium(
     )
 
     ranked_future = sorted(future, key=_rank_score, reverse=True)
-    pool = ranked_future[:_MEDIUM_POOL_SIZE]
-    pool_ids = {p.pid for p in pool}
-    for pos, need in _REQUIRED_POS_COUNTS.items():
-        have = (sum(1 for p in pool if getattr(p, pos))
-                + sum(1 for p in current_team if getattr(p, pos)))
-        for cand in ranked_future:
-            if have >= need:
-                break
-            if cand.pid not in pool_ids and getattr(cand, pos):
-                pool.append(cand)
-                pool_ids.add(cand.pid)
-                have += 1
+    pool = _build_candidate_pool(ranked_future, current_team)
 
-    team_score = _fast_team_scorer(missing_position_penalty)
-    base_stats = [_stat_tuple(p) for p in current_team]
     cand_stats = [_stat_tuple(current)] + [_stat_tuple(p) for p in pool]
     all_indices = tuple(range(len(cand_stats)))
     CURRENT = 0
-
-    def eval_team(extra_indices) -> float:
-        return team_score(base_stats + [cand_stats[i] for i in extra_indices])
-
-    def best_team(indices, choose, forced=()) -> tuple[float, tuple[int, ...]]:
-        if choose <= 0 or not indices:
-            return eval_team(forced), ()
-        if len(indices) <= choose:
-            return eval_team(tuple(forced) + tuple(indices)), tuple(indices)
-        best_score, best_combo = -1.0, ()
-        forced = tuple(forced)
-        for combo in itertools.combinations(indices, choose):
-            s = eval_team(forced + combo)
-            if s > best_score:
-                best_score, best_combo = s, combo
-        return best_score, best_combo
+    best_team = _make_search(missing_position_penalty, current_team, cand_stats)
 
     u_best, target = best_team(all_indices, k)
     without_current = tuple(i for i in all_indices if i != CURRENT)
@@ -309,6 +314,7 @@ def compute_bid_medium(
     if u_best > 0 and u_forced >= snipe_ratio * u_best:
         return 1
     return 0
+
 
 def compute_bid_hard(
     missing_position_penalty: int,
