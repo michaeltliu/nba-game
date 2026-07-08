@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 DIFFICULTIES = ("easy", "medium", "hard")
 SUBSTITUTION_THRESHOLD = 0.84
-MAX_CANDIDATES_RATIO = 6
+MAX_CANDIDATES_RATIO = 5
 
 def _team_scorer(missing_position_penalty: int):
     penalty_factor = 1.0 / (2.0 ** (missing_position_penalty / 4.0))
@@ -60,7 +60,6 @@ def compute_bid_easy(
         return max(team_score(list(combo) + [including]) for combo in itertools.combinations(cands, spots_remaining - 1))
 
     current_player = player_queue[0]
-    print("current player:", current_player.pid, current_player.name)
 
     # Prune player_queue to strongest candidates, ensure current player
     # is included and required position counts are met.
@@ -82,30 +81,24 @@ def compute_bid_easy(
 
     u_best, target_team = best_team(pool, k)
     target_ids = {p.pid for p in target_team}
-    print("target team:", [p.name for p in target_team])
     marginals = {
         t.pid: u_best - best_team(pool_minus(pool, t), k)[0]
         for t in target_team
     }
     marginals_total = sum(marginals.values())
-    print("marginals:", marginals)
     if current_player.pid in target_ids:
         if not marginals_total:
             share = 1 / k
         else:
             share = marginals[current_player.pid] / marginals_total
-        print("bid:", max(1, int(balance * share)))
         return max(1, int(balance * share))
 
     non_target_utilities = {
         p.pid: best_team_including(pool, k, p) for p in pool if p.pid not in target_ids
     }
-    print("non-target utilities:", non_target_utilities)
     u_current = non_target_utilities[current_player.pid]
-    print("u_current:", u_current)
     end_index = -additional_players if additional_players else None
     replacement_utilities = sorted(non_target_utilities.values(), reverse=True)[:end_index]
-    print("replacement utilities:", replacement_utilities)
     u_avg = sum(replacement_utilities) / len(replacement_utilities) if replacement_utilities else 0
 
     if u_current < u_avg or u_current < SUBSTITUTION_THRESHOLD * u_best:
@@ -182,16 +175,20 @@ def _fast_team_scorer(missing_position_penalty: int):
         return result
 
     def team_score(stats: list[tuple]) -> float:
-        pts = ast = reb = blk = stl = tov = ts = 0.0
+        pts = ast = reb = blk = stl = tov = tsm = tsa = 0.0
         masks = []
         for s in stats:
             pts += s[0]; ast += s[1]; reb += s[2]; blk += s[3]
-            stl += s[4]; tov += s[5]; ts += s[6]
-            masks.append(s[7])
+            stl += s[4]; tov += s[5]
+            tsm += s[6] * s[7]; tsa += s[7]
+            masks.append(s[8])
         if tov <= 0:
             tov = 1e-9
+        if tsa <= 0:
+            tsa = 1e-9
+        ts = tsm / tsa
         base = (pts * ast * reb * blk ** 0.2 * stl ** 0.2
-                * math.sqrt(blk + stl) * ts ** 1.5 / math.sqrt(tov))
+                * (blk + stl) ** 0.4 * ts ** 1.5 / math.sqrt(tov))
         return base * penalty ** shortfall(tuple(masks))
 
     return team_score
@@ -199,7 +196,7 @@ def _fast_team_scorer(missing_position_penalty: int):
 
 def _stat_tuple(p: NBAPlayer) -> tuple:
     mask = (1 if p.guard else 0) | (2 if p.forward else 0) | (4 if p.center else 0)
-    return (p.pts, p.ast, p.reb, p.blk, p.stl, p.tov, p.ts, mask)
+    return (p.pts, p.ast, p.reb, p.blk, p.stl, p.tov, p.ts, p.tsa, mask)
 
 
 def _rank_score(p: NBAPlayer) -> float:
@@ -207,7 +204,7 @@ def _rank_score(p: NBAPlayer) -> float:
     with a zero stat (e.g. 0.0 blocks) don't all collapse to rank 0."""
     return (max(p.pts, 0.1) * max(p.ast, 0.1) * max(p.reb, 0.1)
             * max(p.blk, 0.05) ** 0.2 * max(p.stl, 0.05) ** 0.2
-            * math.sqrt(p.blk + p.stl + 0.05)
+            * (p.blk + p.stl + 0.05) ** 0.4
             * max(p.ts, 0.1) ** 1.5 / math.sqrt(max(p.tov, 0.25)))
 
 
