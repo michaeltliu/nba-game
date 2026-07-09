@@ -15,14 +15,14 @@ _CANDIDATE_POOL_SIZE = 15
 # In a second-price auction the winner pays the runner-up's bid, so bidding
 # above the "fair" proportional share is nearly free upside: it converts
 # close losses into wins without raising the price we actually pay.
-_MEDIUM_AGGRESSION = 2.5
+_MEDIUM_AGGRESSION = 2
 # Snipe (bid 1) on a non-target player when forcing him onto the roster still
 # achieves at least this fraction of the unconstrained best team score.
 # Opponents bidding 0 hand us the player at price 0.
 _MEDIUM_SNIPE_RATIO = 0.97
 # Looser snipe ratio for players about to be force-assigned to a random
 # roster: claiming them deterministically beats the dump lottery.
-_MEDIUM_DUMP_SNIPE_RATIO = 0.90
+_MEDIUM_DUMP_SNIPE_RATIO = 0.92
 # Bid everything (minus slot reserve) on the highest-marginal remaining
 # target: no better opportunity exists later in the queue.
 _MEDIUM_ALL_IN_TOP = True

@@ -69,7 +69,7 @@ async def join_room(room_code: str, request: JoinRoomRequest):
 
 
 class AddBotRequest(BaseModel):
-    difficulty: str
+    difficulties: list[str]
 
 @app.post("/rooms/{room_code}/add-bot")
 async def add_bot(
@@ -77,9 +77,13 @@ async def add_bot(
     request: AddBotRequest,
     x_player_id: str = Header(...)
 ):
-    difficulty = request.difficulty
-    if difficulty not in bot_strategy.DIFFICULTIES:
-        return {'success': False, 'failure_msg': 'INVALID_DIFFICULTY'}
+    difficulties = request.difficulties
+    for difficulty in difficulties:
+        if difficulty not in bot_strategy.DIFFICULTIES:
+            return {'success': False, 'failure_msg': 'INVALID_DIFFICULTY'}
+    if not difficulties:
+        return {'success': True, 'bots': []}
+
     async with redis_store.room_lock(room_code):
         room = await redis_store.load_room(room_code)
         if room is None:
@@ -88,20 +92,25 @@ async def add_bot(
             return {'success': False, 'failure_msg': Failure.REQUIRES_OWNER.name}
         if room.round_num > 0:
             return {'success': False, 'failure_msg': Failure.GAME_IN_PROGRESS.name}
-        if room.has_bot_difficulty(difficulty):
-            return {'success': False, 'failure_msg': 'DIFFICULTY_ALREADY_ADDED'}
-        bot_name = room.default_bot_name(difficulty)
-        temp_name = bot_name
-        counter = 0
-        while bot_name in {m.name.strip() for m in room.members.values()}:
-            if counter > 5:
-                return {'success': False, 'failure_msg': 'NAME_TAKEN'}
-            bot_name = temp_name + str(random.randint(1, 100))
-            counter += 1
-        bot_id = str(uuid.uuid4())
-        room.add_bot(bot_id, bot_name, difficulty)
+
+        added_bots = []
+        for difficulty in difficulties:
+            if room.has_bot_difficulty(difficulty):
+                return {'success': False, 'failure_msg': 'DIFFICULTY_ALREADY_ADDED'}
+            bot_name = room.default_bot_name(difficulty)
+            temp_name = bot_name
+            counter = 0
+            while bot_name in {m.name.strip() for m in room.members.values()}:
+                if counter > 5:
+                    return {'success': False, 'failure_msg': 'NAME_TAKEN'}
+                bot_name = temp_name + str(random.randint(1, 100))
+                counter += 1
+            bot_id = str(uuid.uuid4())
+            room.add_bot(bot_id, bot_name, difficulty)
+            added_bots.append({'bot_name': bot_name, 'difficulty': difficulty})
+
         await redis_store.save_room(room)
-    return {'success': True, 'bot_name': bot_name}
+    return {'success': True, 'bots': added_bots}
 
 
 @app.get("/rooms/{room_code}/status")
