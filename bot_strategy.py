@@ -94,7 +94,7 @@ def _fast_team_scorer(missing_position_penalty: int, base_stats: list[tuple]):
         if tsa <= 0:
             tsa = 1e-9
         ts = tsm / tsa
-        base = (pts * ast * reb * blk ** 0.2 * stl ** 0.2
+        base = (pts ** 1.2 * ast * reb * blk ** 0.2 * stl ** 0.2
                 * (blk + stl) ** 0.4 * ts ** 1.5 / math.sqrt(tov))
         return base * penalty ** shortfall(tuple(masks))
 
@@ -109,7 +109,7 @@ def _stat_tuple(p: NBAPlayer) -> tuple:
 def _rank_score(p: NBAPlayer) -> float:
     """Solo strength used only for ranking candidates. Smoothed so players
     with a zero stat (e.g. 0.0 blocks) don't all collapse to rank 0."""
-    return (max(p.pts, 0.1) * max(p.ast, 0.1) * max(p.reb, 0.1)
+    return (max(p.pts, 0.1) ** 1.2 * max(p.ast, 0.1) * max(p.reb, 0.1)
             * max(p.blk, 0.05) ** 0.2 * max(p.stl, 0.05) ** 0.2
             * (p.blk + p.stl + 0.05) ** 0.4
             * max(p.ts, 0.1) ** 1.5 / math.sqrt(max(p.tov, 0.25)))

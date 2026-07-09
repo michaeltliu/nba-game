@@ -25,7 +25,8 @@ class Player(BaseModel):
             tsm += player.ts * player.tsa
             tsa += player.tsa
         ts = tsm/tsa
-        score = pts * ast * reb * blk ** 0.2 * stl ** 0.2 * (blk + stl) ** 0.4 * ts ** 1.5 / math.sqrt(tov) * penalty ** unfilled_positions
+        score = pts ** 1.2 * ast * reb * blk ** 0.2 * stl ** 0.2 * (blk + stl) ** 0.4 * ts ** 1.5 / math.sqrt(tov)
+        score *= penalty ** unfilled_positions
         self.score = score
         c = len(self.nba_team)
         self.avg_stats = {
