@@ -139,7 +139,8 @@ class Room(BaseModel):
             winner = self.members[winner_id]
             winner.nba_team.append(self.player_queue.pop(0))
             winner.balance -= price_paid
-            unfilled_positions = winner.best_lineup() # Call best_lineup() after appending the new player to nba_team
+            # Call best_lineup() after appending the new player to nba_team
+            unfilled_positions = winner.best_lineup() if self.missing_position_penalty else 0
             winner.compute_score(unfilled_positions, 1 / 2 ** (self.missing_position_penalty / 4))
             winner_name = winner.name
 
