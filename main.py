@@ -2,7 +2,7 @@ from fastapi import FastAPI, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from enums import Failure
-from room import Room
+from room import Room, SUPPORTED_ERAS
 import bot_strategy
 import random
 import redis_store
@@ -32,17 +32,23 @@ class CreateRoomRequest(BaseModel):
     bid_submission_timer: int
     missing_position_penalty: int
     additional_players_queued: int
+    nba_era: str
 
 @app.post("/create-room")
 async def create_room(request: CreateRoomRequest):
     if not request.player_name:
         return {'success': False, 'failure_msg': Failure.EMPTY_PLAYER_NAME.name}
+    if request.nba_era not in SUPPORTED_ERAS:
+        return {'success': False, 'failure_msg': 'UNSUPPORTED_ERA'}
     owner_id = str(uuid.uuid4())
     added_players = min(max(request.additional_players_queued, 0), 5)
     penalty = request.missing_position_penalty if request.missing_position_penalty in (0, 1, 2) else 1
     bid_timer = max(request.bid_submission_timer, 10)
     room = await redis_store.create_room_with_unique_code(
-        lambda code: Room.create(owner_id, request.player_name, code, bid_timer, penalty, added_players)
+        lambda code: Room.create(
+            owner_id, request.player_name, code, bid_timer,
+            penalty, added_players, request.nba_era
+        )
     )
     return {'success': True, 'room_code': room.join_code, 'player_id': owner_id}
 
@@ -136,7 +142,8 @@ async def room_status(room_code: str):
             'room_settings': {
                 'missing_position_penalty': room.missing_position_penalty,
                 'bid_timer': room.bid_timer,
-                'additional_players_queued': room.additional_players_queued
+                'additional_players_queued': room.additional_players_queued,
+                'nba_era': room.nba_era
             }
         }
     return status

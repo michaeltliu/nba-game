@@ -8,24 +8,27 @@ import copy
 import pandas as pd
 import bot_strategy
 
-_TOP_PLAYERS_DF: pd.DataFrame = None
+SUPPORTED_ERAS = {'2010_20', '2020_26', '2025_26'}
+_TOP_PLAYERS_BY_ERA: dict[str, pd.DataFrame] = dict()
 
-def _load_players_pool():
-    global _TOP_PLAYERS_DF
-    
+def _load_players_pool(nba_era: str):
+    global _TOP_PLAYERS_BY_ERA
+
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(base_dir, 'player_averages_2025_26.csv')
+    csv_path = os.path.join(base_dir, f"player_averages_{nba_era}.csv")
     
-    df = pd.read_csv(csv_path)
-    _TOP_PLAYERS_DF = df.head(150)
+    df = pd.read_csv(csv_path).head(150)
+    _TOP_PLAYERS_BY_ERA[nba_era] = df
+    return df
 
-def get_sampled_players(num_players_needed: int) -> list[NBAPlayer]:
-    global _TOP_PLAYERS_DF
-    if _TOP_PLAYERS_DF is None:
-        _load_players_pool()
-    
-    sample_size = min(num_players_needed, len(_TOP_PLAYERS_DF))
-    sampled_df = _TOP_PLAYERS_DF.sample(n=sample_size)
+def get_sampled_players(nba_era: str, num_players_needed: int) -> list[NBAPlayer]:
+    global _TOP_PLAYERS_BY_ERA
+    if nba_era in _TOP_PLAYERS_BY_ERA:
+        era_df = _TOP_PLAYERS_BY_ERA[nba_era]
+    else:
+        era_df = _load_players_pool(nba_era)
+    sample_size = min(num_players_needed, len(era_df))
+    sampled_df = era_df.sample(n=sample_size)
     
     players = [
         NBAPlayer(
@@ -53,6 +56,7 @@ class Room(BaseModel):
     bid_timer: int
     missing_position_penalty: int
     additional_players_queued: int
+    nba_era: str
 
     members: dict[str, Player] = Field(default_factory=dict)
     player_queue: list[NBAPlayer] = Field(default_factory=list)
@@ -64,14 +68,15 @@ class Room(BaseModel):
     @classmethod
     def create(
         cls, owner_id, owner_name, join_code, bid_timer,
-        missing_position_penalty, additional_players_queued
+        missing_position_penalty, additional_players_queued, nba_era
     ) -> Room:
         room = cls(
             owner_id=owner_id,
             join_code=join_code,
             bid_timer=bid_timer,
             missing_position_penalty=missing_position_penalty,
-            additional_players_queued=additional_players_queued)
+            additional_players_queued=additional_players_queued,
+            nba_era=nba_era)
         room.members[owner_id] = Player(name=owner_name)
         return room
 
@@ -117,7 +122,7 @@ class Room(BaseModel):
 
     def start_game(self):
         num_players_needed = (5 + self.additional_players_queued) * len(self.members)
-        self.player_queue = get_sampled_players(num_players_needed)
+        self.player_queue = get_sampled_players(self.nba_era, num_players_needed)
         # This reset step isn't done on game completion in order to preserve history
         self.prev_auction_result = None
         self.next_round()
