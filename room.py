@@ -8,7 +8,7 @@ import copy
 import pandas as pd
 import bot_strategy
 
-SUPPORTED_ERAS = {'2010_20', '2020_26', '2025_26'}
+SUPPORTED_ERAS = {'1990_00', '2000_10', '2010_20', '2020_26', '2025_26'}
 _TOP_PLAYERS_BY_ERA: dict[str, pd.DataFrame] = dict()
 
 def _load_players_pool(nba_era: str):
