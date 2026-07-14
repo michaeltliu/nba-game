@@ -15,7 +15,7 @@ _CANDIDATE_POOL_SIZE = 15
 # In a second-price auction the winner pays the runner-up's bid, so bidding
 # above the "fair" proportional share is nearly free upside: it converts
 # close losses into wins without raising the price we actually pay.
-_MEDIUM_AGGRESSION = 2
+_MEDIUM_AGGRESSION = 1.5
 # Snipe (bid 1) on a non-target player when forcing him onto the roster still
 # achieves at least this fraction of the unconstrained best team score.
 # Opponents bidding 0 hand us the player at price 0.
