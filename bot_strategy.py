@@ -189,6 +189,7 @@ def compute_bid_easy(
     additional_players: int,
     room_players: list[Player],
     player_queue: list[NBAPlayer],
+    bot_name: str,
     current_team: list[NBAPlayer],
     balance: int,
 ) -> int:
@@ -260,6 +261,7 @@ def compute_bid_medium(
     additional_players: int,
     room_players: list[Player],
     player_queue: list[NBAPlayer],
+    bot_name: str,
     current_team: list[NBAPlayer],
     balance: int,
 ) -> int:
@@ -274,18 +276,8 @@ def compute_bid_medium(
     current = player_queue[0]
     future = player_queue[1:]
 
-    # Identify ourselves among the room players. _submit_bot_bids passes the
-    # member's own nba_team list, so an identity check works; fall back to
-    # matching state in case a caller passes copies.
-    me = next((p for p in room_players if p.nba_team is current_team), None)
-    if me is None:
-        my_pids = sorted(x.pid for x in current_team)
-        me = next(
-            (p for p in room_players
-             if p.balance == balance and sorted(x.pid for x in p.nba_team) == my_pids),
-            None,
-        )
-    opponents = [p for p in room_players if p is not me]
+    me_idx = next(i for i, p in enumerate(room_players) if p.name == bot_name)
+    opponents = [p for i, p in enumerate(room_players) if i != me_idx]
     max_opp_balance = max(
         (o.balance for o in opponents if len(o.nba_team) < 5), default=0
     )
@@ -469,23 +461,10 @@ def _hard_margin(scores: list[float], player_idx: int) -> float:
 
 def _hard_find_self(
     room_players: list[Player],
-    current_team: list[NBAPlayer],
-    balance: int,
+    bot_name: str,
 ) -> int:
-    """Find this hard bot's Player entry despite BotInputs copying the list."""
-    pids = sorted(p.pid for p in current_team)
-    state_matches = [
-        i for i, player in enumerate(room_players)
-        if player.balance == balance
-        and sorted(p.pid for p in player.nba_team) == pids
-    ]
-    for i in state_matches:
-        if room_players[i].bot_difficulty == "hard":
-            return i
-    for i, player in enumerate(room_players):
-        if player.bot_difficulty == "hard":
-            return i
-    return state_matches[0] if state_matches else 0
+    """Find this hard bot's Player entry by its unique room name."""
+    return next(i for i, player in enumerate(room_players) if player.name == bot_name)
 
 
 def compute_bid_hard(
@@ -493,6 +472,7 @@ def compute_bid_hard(
     additional_players: int,
     room_players: list[Player],
     player_queue: list[NBAPlayer],
+    bot_name: str,
     current_team: list[NBAPlayer],
     balance: int,
 ) -> int:
@@ -520,7 +500,7 @@ def compute_bid_hard(
         / max(1, total_open_slots + disposable)
     )
 
-    me_idx = _hard_find_self(room_players, current_team, balance)
+    me_idx = _hard_find_self(room_players, bot_name)
     balances = [player.balance for player in room_players]
     balances[me_idx] = balance
     open_slots[me_idx] = slots_needed
@@ -683,6 +663,7 @@ class BotInputs(BaseModel):
     player_queue: list[NBAPlayer]
 
     # Bot state
+    bot_name: str
     current_team: list[NBAPlayer]
     balance: int
 

@@ -114,6 +114,7 @@ class Room(BaseModel):
                 additional_players=additional_players,
                 room_players=list(self.members.values()),
                 player_queue=self.player_queue,
+                bot_name=member.name,
                 current_team=member.nba_team,
                 balance=member.balance,
             )
