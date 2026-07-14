@@ -27,6 +27,20 @@ _MEDIUM_DUMP_SNIPE_RATIO = 0.92
 # target: no better opportunity exists later in the queue.
 _MEDIUM_ALL_IN_TOP = True
 
+# --- Hard bot tunables ---
+# The hard bot evaluates a pessimistic free completion as well as the best
+# completion. Searching a small, team-specific low-end pool keeps that lower
+# bound inexpensive even in large rooms.
+_HARD_FLOOR_POOL_SIZE = 13
+# Turn relative budget-per-open-slot into a position between the pessimistic
+# free team and the best team. An exponent below one reflects that the floor
+# is deliberately adversarial rather than an average free roster.
+_HARD_MARKET_CURVE = 0.35
+_HARD_MARGIN_TOLERANCE = 0.002
+_HARD_SNIPE_RATIO = 0.985
+_HARD_DUMP_SNIPE_RATIO = 0.94
+_SCORE_EPSILON = 1e-12
+
 
 def _fast_team_scorer(missing_position_penalty: int, base_stats: list[tuple]):
     """Returns eval(extra_stats) mirroring Player.compute_score + best_lineup.
@@ -316,6 +330,164 @@ def compute_bid_medium(
     return 0
 
 
+def _hard_best_completion(
+    missing_position_penalty: int,
+    current_team: list[NBAPlayer],
+    available: list[NBAPlayer],
+    choose: int,
+) -> float:
+    """Best completion score from a small high-upside candidate pool."""
+    if choose <= 0:
+        return _fast_team_scorer(
+            missing_position_penalty, [_stat_tuple(p) for p in current_team]
+        )([])
+    if len(available) < choose:
+        return 0.0
+
+    ranked = sorted(available, key=_rank_score, reverse=True)
+    pool = _build_candidate_pool(ranked, current_team)
+    if len(pool) < choose:
+        pool = ranked
+    cand_stats = [_stat_tuple(p) for p in pool]
+    best_team = _make_search(
+        missing_position_penalty, current_team, cand_stats
+    )
+    return best_team(tuple(range(len(pool))), choose)[0]
+
+
+def _hard_free_completion(
+    missing_position_penalty: int,
+    current_team: list[NBAPlayer],
+    available: list[NBAPlayer],
+    choose: int,
+    disposable_players: int,
+) -> float:
+    """Pessimistic score obtainable without winning another auction.
+
+    The worst ``disposable_players`` are first removed: those players can be
+    left unassigned at the end of the game. Among the players that must be
+    assigned, search a low-end pool for the worst completion. This implements
+    a useful absolute baseline without exhaustively searching a large queue.
+    """
+    eval_extras = _fast_team_scorer(
+        missing_position_penalty, [_stat_tuple(p) for p in current_team]
+    )
+    if choose <= 0:
+        return eval_extras([])
+    if len(available) < choose:
+        return 0.0
+
+    ranked_low = sorted(available, key=_rank_score)
+    can_discard = max(0, len(ranked_low) - choose)
+    discard = min(max(0, disposable_players), can_discard)
+    survivors = ranked_low[discard:]
+
+    # Once truly disposable players are gone, rank the low end in the context
+    # of this roster. This catches position and stat-complement edge cases that
+    # a player-only ranking can miss.
+    survivor_stats = [(_stat_tuple(p), p) for p in survivors]
+    survivor_stats.sort(key=lambda item: eval_extras([item[0]]))
+    pool = survivor_stats[:max(choose, min(_HARD_FLOOR_POOL_SIZE, len(survivors)))]
+
+    worst = math.inf
+    for combo in itertools.combinations(pool, choose):
+        score = eval_extras([item[0] for item in combo])
+        if score < worst:
+            worst = score
+    return worst if worst < math.inf else 0.0
+
+
+def _hard_completion_bounds(
+    missing_position_penalty: int,
+    current_team: list[NBAPlayer],
+    available: list[NBAPlayer],
+    choose: int,
+    disposable_players: int,
+) -> tuple[float, float]:
+    """Return (free-floor score, best score) for a partial roster."""
+    ceiling = _hard_best_completion(
+        missing_position_penalty, current_team, available, choose
+    )
+    floor = _hard_free_completion(
+        missing_position_penalty,
+        current_team,
+        available,
+        choose,
+        disposable_players,
+    )
+    if ceiling <= 0:
+        return floor, floor
+    return min(floor, ceiling), ceiling
+
+
+def _hard_project_scores(
+    bounds: list[tuple[float, float]],
+    balances: list[int],
+    open_slots: list[int],
+    market_curve: float,
+) -> list[float]:
+    """Project final scores from completion bounds and market buying power."""
+    rates = [
+        balance / slots if balance > 0 and slots > 0 else 0.0
+        for balance, slots in zip(balances, open_slots)
+    ]
+    projected: list[float] = []
+    for i, ((floor, ceiling), slots) in enumerate(zip(bounds, open_slots)):
+        floor = max(floor, _SCORE_EPSILON)
+        ceiling = max(ceiling, floor)
+        if slots <= 0 or ceiling <= floor:
+            projected.append(ceiling)
+            continue
+
+        own_rate = rates[i]
+        competition = math.sqrt(sum(
+            rate * rate for j, rate in enumerate(rates) if j != i
+        ))
+        if own_rate <= 0:
+            quality = 0.0
+        elif competition <= 0:
+            quality = 1.0
+        else:
+            market_share = own_rate / (own_rate + competition)
+            quality = market_share ** market_curve
+        projected.append(
+            math.exp(math.log(floor) + quality * math.log(ceiling / floor))
+        )
+    return projected
+
+
+def _hard_margin(scores: list[float], player_idx: int) -> float:
+    """Log-score lead over the strongest opponent."""
+    own = math.log(max(scores[player_idx], _SCORE_EPSILON))
+    rivals = [
+        math.log(max(score, _SCORE_EPSILON))
+        for i, score in enumerate(scores)
+        if i != player_idx
+    ]
+    return own - max(rivals) if rivals else own
+
+
+def _hard_find_self(
+    room_players: list[Player],
+    current_team: list[NBAPlayer],
+    balance: int,
+) -> int:
+    """Find this hard bot's Player entry despite BotInputs copying the list."""
+    pids = sorted(p.pid for p in current_team)
+    state_matches = [
+        i for i, player in enumerate(room_players)
+        if player.balance == balance
+        and sorted(p.pid for p in player.nba_team) == pids
+    ]
+    for i in state_matches:
+        if room_players[i].bot_difficulty == "hard":
+            return i
+    for i, player in enumerate(room_players):
+        if player.bot_difficulty == "hard":
+            return i
+    return state_matches[0] if state_matches else 0
+
+
 def compute_bid_hard(
     missing_position_penalty: int,
     additional_players: int,
@@ -324,7 +496,175 @@ def compute_bid_hard(
     current_team: list[NBAPlayer],
     balance: int,
 ) -> int:
-    return 1
+    slots_needed = 5 - len(current_team)
+    if slots_needed <= 0 or not player_queue or balance <= 0:
+        return 0
+
+    current = player_queue[0]
+    future = player_queue[1:]
+    open_slots = [max(0, 5 - len(player.nba_team)) for player in room_players]
+    total_open_slots = sum(open_slots)
+
+    # The queue/open-slot difference is the number that may finish unassigned.
+    # Prefer live state over the initial setting so this also handles direct
+    # callers and unusual test fixtures correctly.
+    disposable = max(0, len(player_queue) - total_open_slots)
+    if total_open_slots <= 0:
+        return 0
+    # More surplus players make a high-quality completion attainable without
+    # dominating the budget market. Move projections toward the ceiling as
+    # supply slack grows, while retaining the adversarial free-team floor.
+    market_curve = (
+        _HARD_MARKET_CURVE
+        * total_open_slots
+        / max(1, total_open_slots + disposable)
+    )
+
+    me_idx = _hard_find_self(room_players, current_team, balance)
+    balances = [player.balance for player in room_players]
+    balances[me_idx] = balance
+    open_slots[me_idx] = slots_needed
+
+    # Only positive-balance incomplete opponents can set a second price.
+    active_opponents = [
+        i for i, (b, slots) in enumerate(zip(balances, open_slots))
+        if i != me_idx and b > 0 and slots > 0
+    ]
+    if len(future) < slots_needed:
+        return 1
+
+    without_bounds: list[tuple[float, float]] = []
+    with_bounds: list[tuple[float, float]] = []
+    for i, player in enumerate(room_players):
+        team = current_team if i == me_idx else player.nba_team
+        slots = open_slots[i]
+        without_bounds.append(_hard_completion_bounds(
+            missing_position_penalty, team, future, slots, disposable
+        ))
+        if slots > 0:
+            with_bounds.append(_hard_completion_bounds(
+                missing_position_penalty,
+                team + [current],
+                future,
+                slots - 1,
+                disposable,
+            ))
+        else:
+            with_bounds.append(without_bounds[-1])
+
+    base_scores = _hard_project_scores(
+        without_bounds, balances, open_slots, market_curve
+    )
+
+    # Estimate each rival's reservation price from the same roster/budget
+    # fundamentals used for ourselves. This is deliberately strategy-agnostic:
+    # it works for humans and future bots, not only the current easy/medium
+    # implementations.
+    opponent_reservations: dict[int, int] = {}
+    opponent_zero_scores: dict[int, float] = {}
+    for i in active_opponents:
+        reservation = 0
+        score_at_zero = 0.0
+        for price in range(balances[i] + 1):
+            trial_bounds = list(without_bounds)
+            trial_bounds[i] = with_bounds[i]
+            trial_balances = list(balances)
+            trial_balances[i] -= price
+            trial_slots = list(open_slots)
+            trial_slots[i] -= 1
+            score = _hard_project_scores(
+                trial_bounds, trial_balances, trial_slots, market_curve
+            )[i]
+            if price == 0:
+                score_at_zero = score
+            if score + _SCORE_EPSILON >= base_scores[i]:
+                reservation = price
+        if (
+            reservation == 0
+            and score_at_zero >= _HARD_SNIPE_RATIO * base_scores[i]
+        ):
+            reservation = 1
+        opponent_reservations[i] = reservation
+        opponent_zero_scores[i] = score_at_zero
+
+    likely_winner = None
+    if opponent_reservations:
+        likely_winner = max(
+            opponent_reservations,
+            key=lambda i: (
+                opponent_reservations[i],
+                opponent_zero_scores[i] / max(base_scores[i], _SCORE_EPSILON),
+                balances[i],
+            ),
+        )
+        if opponent_reservations[likely_winner] <= 0:
+            likely_winner = None
+
+    def scenario_scores(recipient: int, price_paid: int) -> list[float]:
+        scenario_bounds = list(without_bounds)
+        scenario_bounds[recipient] = with_bounds[recipient]
+        scenario_balances = list(balances)
+        scenario_balances[recipient] = max(
+            0, scenario_balances[recipient] - price_paid
+        )
+        scenario_slots = list(open_slots)
+        scenario_slots[recipient] = max(0, scenario_slots[recipient] - 1)
+        return _hard_project_scores(
+            scenario_bounds, scenario_balances, scenario_slots, market_curve
+        )
+
+    reservation = 0
+    if likely_winner is None:
+        # With no expected competing bid, money is not the opportunity cost;
+        # compare taking the player for free with preserving the future queue.
+        for price in range(balance + 1):
+            if (
+                scenario_scores(me_idx, price)[me_idx] + _SCORE_EPSILON
+                >= base_scores[me_idx]
+            ):
+                reservation = price
+    else:
+        # A losing bid becomes the second price. Compare the championship
+        # margin when we win and pay that price with the margin when the most
+        # interested rival wins and is made to pay it. This includes both
+        # player value and denial value, while naturally preserving budget for
+        # stronger players later in the known queue.
+        for price in range(balance + 1):
+            win_scores = scenario_scores(me_idx, price)
+            rival_price = min(price, balances[likely_winner])
+            lose_scores = scenario_scores(likely_winner, rival_price)
+            if (
+                _hard_margin(win_scores, me_idx) + _HARD_MARGIN_TOLERANCE
+                >= _hard_margin(lose_scores, me_idx)
+            ):
+                reservation = price
+
+    if reservation <= 0:
+        # On the force-assignment pass, claim a near-equivalent player for one
+        # rather than accepting a random recipient. The strict ratio prevents
+        # a bad player from consuming a valuable roster slot.
+        force_assignment_imminent = current.skipped > max(
+            disposable, additional_players
+        )
+        take_for_free = scenario_scores(me_idx, 0)[me_idx]
+        ratio = (
+            _HARD_DUMP_SNIPE_RATIO
+            if force_assignment_imminent
+            else _HARD_SNIPE_RATIO
+        )
+        if take_for_free >= ratio * base_scores[me_idx]:
+            return 1
+        return 0
+
+    max_opponent_balance = max(
+        (balances[i] for i in active_opponents), default=0
+    )
+    if max_opponent_balance <= 0:
+        return 1
+    # More than one dollar above the richest possible rival cannot change the
+    # auction result, and a positive reservation should always submit a
+    # positive integer bid.
+    return max(1, min(reservation, balance, max_opponent_balance + 1))
 
 
 _STRATEGIES = {
