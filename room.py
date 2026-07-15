@@ -8,14 +8,17 @@ import copy
 import pandas as pd
 import bot_strategy
 
-SUPPORTED_ERAS = {'1990_00', '2000_10', '2010_20', '2020_26', '2025_26'}
+SUPPORTED_ERAS = {
+    'averages_1990_00', 'averages_2000_10', 'averages_2010_20', 'averages_2020_26', 'averages_2025_26',
+    'peaks_1990_00'
+}
 _TOP_PLAYERS_BY_ERA: dict[str, pd.DataFrame] = dict()
 
 def _load_players_pool(nba_era: str):
     global _TOP_PLAYERS_BY_ERA
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(base_dir, f"player_averages_{nba_era}.csv")
+    csv_path = os.path.join(base_dir, f"player_{nba_era}.csv")
     
     df = pd.read_csv(csv_path).head(150)
     _TOP_PLAYERS_BY_ERA[nba_era] = df
@@ -30,24 +33,27 @@ def get_sampled_players(nba_era: str, num_players_needed: int) -> list[NBAPlayer
     sample_size = min(num_players_needed, len(era_df))
     sampled_df = era_df.sample(n=sample_size)
     
-    players = [
-        NBAPlayer(
-            name=f"{row.firstName} {row.lastName}",
-            pid=int(row.personId),
-            guard=bool(row.guard),
-            forward=bool(row.forward),
-            center=bool(row.center),
-            pts=float(row.points),
-            ast=float(row.assists),
-            reb=float(row.reboundsTotal),
-            blk=float(row.blocks),
-            stl=float(row.steals),
-            tov=float(row.turnovers),
-            ts=float(row.ts),
-            tsa=float(row.trueShootingAttempts)
-        )
-        for row in sampled_df.itertuples(index=False)
-    ]
+    peak = 'peak' in nba_era
+    players = []
+    for row in sampled_df.itertuples(index=False):
+        data = {
+            'name': f"{row.firstName} {row.lastName}",
+            'pid': int(row.personId),
+            'guard': bool(row.guard),
+            'forward': bool(row.forward),
+            'center': bool(row.center),
+            'pts': float(row.points),
+            'ast': float(row.assists),
+            'reb': float(row.reboundsTotal),
+            'blk': float(row.blocks),
+            'stl': float(row.steals),
+            'tov': float(row.turnovers),
+            'ts': float(row.ts),
+            'tsa': float(row.trueShootingAttempts)
+        }
+        if peak:
+            data['peak'] = int(row.season)
+        players.append(NBAPlayer(**data))
     return players
 
 class Room(BaseModel):

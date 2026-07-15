@@ -52,4 +52,5 @@ class NBAPlayer(BaseModel):
     tov: float
     ts: float
     tsa: float
+    peak: int = 0
     skipped: int = 0
