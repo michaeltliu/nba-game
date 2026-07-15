@@ -32,6 +32,11 @@ _MEDIUM_ALL_IN_TOP = True
 # completion. Searching a small, team-specific low-end pool keeps that lower
 # bound inexpensive even in large rooms.
 _HARD_FLOOR_POOL_SIZE = 13
+# A newly acquired player can sharply improve the adversarial free-completion
+# floor even when he barely improves the best attainable team. Count only <WEIGHT>
+# of that positive floor movement so early bids do not overpay for worst-case
+# roster insurance. Downside movement remains undampened.
+_HARD_FLOOR_UPSIDE_WEIGHT = 0.75
 # Turn relative budget-per-open-slot into a position between the pessimistic
 # free team and the best team. An exponent below one reflects that the floor
 # is deliberately adversarial rather than an average free roster.
@@ -412,6 +417,28 @@ def _hard_completion_bounds(
     return min(floor, ceiling), ceiling
 
 
+def _hard_dampen_floor_upside(
+    baseline: tuple[float, float],
+    acquisition: tuple[float, float],
+) -> tuple[float, float]:
+    """Discount speculative floor upside while preserving its direction.
+
+    The free-completion floor is intentionally adversarial, so a large gain in
+    that floor is weak evidence that the current player deserves a large bid.
+    Weight the gain in log-score space, matching the projection math below.
+    A player that lowers the floor keeps the full downside signal.
+    """
+    baseline_floor = baseline[0]
+    floor, ceiling = acquisition
+    if floor <= baseline_floor or baseline_floor <= 0:
+        return acquisition
+    weighted_floor = math.exp(
+        math.log(baseline_floor)
+        + _HARD_FLOOR_UPSIDE_WEIGHT * math.log(floor / baseline_floor)
+    )
+    return min(weighted_floor, ceiling), ceiling
+
+
 def _hard_project_scores(
     bounds: list[tuple[float, float]],
     balances: list[int],
@@ -522,12 +549,15 @@ def compute_bid_hard(
             missing_position_penalty, team, future, slots, disposable
         ))
         if slots > 0:
-            with_bounds.append(_hard_completion_bounds(
+            acquisition_bounds = _hard_completion_bounds(
                 missing_position_penalty,
                 team + [current],
                 future,
                 slots - 1,
                 disposable,
+            )
+            with_bounds.append(_hard_dampen_floor_upside(
+                without_bounds[-1], acquisition_bounds
             ))
         else:
             with_bounds.append(without_bounds[-1])

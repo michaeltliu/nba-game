@@ -25,7 +25,7 @@ def play_game(difficulties: list[str], penalty: int, additional: int) -> dict:
         bid_timer=10,
         missing_position_penalty=penalty,
         additional_players_queued=additional,
-        nba_era="2025_26"
+        nba_era="averages_2025_26"
     )
     # Replace the human owner with bots only. Random ids so auction
     # tie-breaking (dict iteration order) isn't biased toward either bot.
