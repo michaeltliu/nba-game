@@ -131,10 +131,11 @@ class Room(BaseModel):
     def handle_auction_end(self, winner_id: str, price_paid: int):
         nba_player = self.player_queue[0]
         if not winner_id:
+            incompletes = self._incomplete_roster_members()
             skip_threshold = self.additional_players_queued * len(self.members)
-            if nba_player.skipped > skip_threshold:
+            if nba_player.skipped > skip_threshold or (incompletes and not self._expected_bidders()):
                 self.handle_auction_end(
-                    random.choice(self._incomplete_roster_members()),
+                    random.choice(incompletes),
                     price_paid # Should be 0 in this case
                 )
                 return
