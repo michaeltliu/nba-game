@@ -10,7 +10,7 @@ import bot_strategy
 
 SUPPORTED_ERAS = {
     'averages_1990_00', 'averages_2000_10', 'averages_2010_20', 'averages_2020_26', 'averages_2025_26',
-    'peaks_1990_00'
+    'peaks_1990_00', 'peaks_2000_10'
 }
 _TOP_PLAYERS_BY_ERA: dict[str, pd.DataFrame] = dict()
 
