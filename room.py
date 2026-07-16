@@ -21,6 +21,7 @@ def _load_players_pool(nba_era: str):
     csv_path = os.path.join(base_dir, f"player_{nba_era}.csv")
     
     df = pd.read_csv(csv_path).head(150)
+    df['br_id'] = df['br_id'].fillna('')
     _TOP_PLAYERS_BY_ERA[nba_era] = df
     return df
 
@@ -39,6 +40,7 @@ def get_sampled_players(nba_era: str, num_players_needed: int) -> list[NBAPlayer
         data = {
             'name': f"{row.firstName} {row.lastName}",
             'pid': int(row.personId),
+            'br_id': str(row.br_id),
             'guard': bool(row.guard),
             'forward': bool(row.forward),
             'center': bool(row.center),

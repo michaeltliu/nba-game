@@ -10,8 +10,9 @@ import argparse
 import re
 import sys
 import time
+from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -19,6 +20,19 @@ BASE_URL = "https://www.basketball-reference.com"
 SEARCH_URL = f"{BASE_URL}/search/search.fcgi"
 PLAYER_PATH_RE = re.compile(r"^/players/[^/]+/([a-z0-9]+)\.html$")
 HEADSHOT_RE = re.compile(r"/images/headshots/[^/?#]+\.jpg(?:[?#].*)?$")
+
+
+@dataclass(frozen=True)
+class PlayerPhotoLookup:
+    """Basketball Reference identity and optional photo information."""
+
+    player_id: str
+    player_url: str
+    headshot_url: str | None
+
+    @property
+    def has_headshot(self) -> bool:
+        return self.headshot_url is not None
 
 
 class PlayerSearchParser(HTMLParser):
@@ -95,13 +109,14 @@ class BasketballReferenceClient:
         except requests.RequestException as error:
             raise RuntimeError(f"Basketball Reference request failed: {error}") from error
 
-    def find_player(self, name: str) -> tuple[str, str]:
-        """Return ``(basketball_reference_id, headshot_url)`` for a name."""
+    def lookup_player(self, name: str) -> PlayerPhotoLookup:
+        """Return a player's Basketball Reference ID and optional headshot."""
         response = self._get(SEARCH_URL, params={"search": name})
 
         # Some unambiguous searches redirect straight to the player page.
-        player_path = response.url.removeprefix(BASE_URL)
+        player_path = urlparse(response.url).path
         match = PLAYER_PATH_RE.match(player_path)
+        player_response = response
         if match is None:
             search_parser = PlayerSearchParser()
             search_parser.feed(response.text)
@@ -112,16 +127,34 @@ class BasketballReferenceClient:
             raise LookupError(f"No Basketball Reference player found for {name!r}")
 
         player_id = match.group(1)
-        player_response = self._get(urljoin(BASE_URL, player_path))
+        player_url = urljoin(BASE_URL, player_path)
+        if urlparse(response.url).path != player_path:
+            player_response = self._get(player_url)
+
         headshot_parser = HeadshotParser()
         headshot_parser.feed(player_response.text)
 
-        if headshot_parser.image_url is None:
-            raise LookupError(
-                f"Basketball Reference has no headshot for {name!r} ({player_id})"
-            )
+        return PlayerPhotoLookup(
+            player_id=player_id,
+            player_url=player_url,
+            headshot_url=headshot_parser.image_url,
+        )
 
-        return player_id, headshot_parser.image_url
+    def find_player(self, name: str) -> tuple[str, str]:
+        """Return ``(basketball_reference_id, headshot_url)`` for a name.
+
+        This compatibility method retains the original behavior of raising
+        ``LookupError`` when the player page has no headshot. New callers that
+        need to distinguish a missing player from a missing photo should use
+        :meth:`lookup_player`.
+        """
+        result = self.lookup_player(name)
+        if result.headshot_url is None:
+            raise LookupError(
+                f"Basketball Reference has no headshot for {name!r} "
+                f"({result.player_id})"
+            )
+        return result.player_id, result.headshot_url
 
 
 def main() -> int:

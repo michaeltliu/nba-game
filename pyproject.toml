@@ -9,7 +9,9 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi[standard]",
     "pandas",
-    "redis"
+    "pillow",
+    "redis",
+    "requests"
 ]
 
 [tool.setuptools]
